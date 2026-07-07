@@ -2,24 +2,39 @@ import telebot
 import time
 import os
 import random
+import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
 # ============ التوكن ============
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or "8604874550:AAFKwuuZRCGCHNCwaOS7DAJq_N5-0E-LqiA"
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# ============ SESSIONS ============
+user_sessions = {}
 
 # ============ المتصفح ============
 def create_browser():
-    options = FirefoxOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.set_preference("dom.webdriver.enabled", False)
-    return webdriver.Firefox(options=options)
+    options = ChromeOptions()
+    options.add_argument("--headless")                 # شغال من غير واجهة
+    options.add_argument("--no-sandbox")               # ضروري لـ Railway
+    options.add_argument("--disable-dev-shm-usage")    # ضروري لـ Railway
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--remote-debugging-port=9222")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    return driver
 
 def human_typing(element, text):
     for char in text:
@@ -140,7 +155,12 @@ def secure(msg):
 
     bot.reply_to(msg, f"⏳ جاري تسجيل الدخول إلى الحساب: {old_email}...")
 
-    driver = create_browser()
+    try:
+        driver = create_browser()
+    except Exception as e:
+        bot.reply_to(msg, f"❌ فشل إنشاء المتصفح: {str(e)[:100]}")
+        return
+
     user_sessions[chat_id] = {"driver": driver, "old_pass": old_pass, "new_email": new_email, "new_pass": new_pass}
 
     result = login_microsoft(driver, old_email, old_pass)
