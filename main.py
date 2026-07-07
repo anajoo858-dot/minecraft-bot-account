@@ -9,7 +9,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 # ============ التوكن ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or "YOUR_BOT_TOKEN_HERE"
@@ -21,17 +20,22 @@ user_sessions = {}
 # ============ المتصفح ============
 def create_browser():
     options = ChromeOptions()
-    options.add_argument("--headless")                 # شغال من غير واجهة
-    options.add_argument("--no-sandbox")               # ضروري لـ Railway
-    options.add_argument("--disable-dev-shm-usage")    # ضروري لـ Railway
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--remote-debugging-port=9222")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-
-    service = Service(ChromeDriverManager().install())
+    
+    # استخدم Chrome المثبت على النظام
+    chrome_path = os.environ.get("CHROME_PATH", "/usr/bin/google-chrome")
+    options.binary_location = chrome_path
+    
+    # ChromeDriver في PATH
+    service = Service("/usr/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
     
     return driver
@@ -158,7 +162,7 @@ def secure(msg):
     try:
         driver = create_browser()
     except Exception as e:
-        bot.reply_to(msg, f"❌ فشل إنشاء المتصفح: {str(e)[:100]}")
+        bot.reply_to(msg, f"❌ فشل إنشاء المتصفح: {str(e)[:200]}")
         return
 
     user_sessions[chat_id] = {"driver": driver, "old_pass": old_pass, "new_email": new_email, "new_pass": new_pass}
