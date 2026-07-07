@@ -7,8 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium_stealth import stealth
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from selenium.webdriver.chrome.service import Service
 
 # ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -18,7 +17,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
-# ============ SELENIUM (LOCAL) ============
+# ============ SELENIUM (DOCKER) ============
 def create_browser():
     options = ChromeOptions()
     options.add_argument("--headless=new")
@@ -26,23 +25,14 @@ def create_browser():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1366,768")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
-    
-    driver = webdriver.Chrome(options=options)
-    
-    # ========== إخفاء أثر Selenium ==========
-    stealth(driver,
-        languages=["en-US", "en"],
-        vendor="Google Inc.",
-        platform="Win32",
-        webgl_vendor="Intel Inc.",
-        renderer="Intel Iris OpenGL Engine",
-        fix_hairline=True,
-    )
-    
+
+    service = Service("/usr/local/bin/chromedriver")
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.set_page_load_timeout(60)
     return driver
 
 def human_typing(element, text):
@@ -142,6 +132,7 @@ def check_minecraft_license(driver):
 
 # ============ KEYBOARD MENU ============
 def get_main_menu():
+    from telebot.types import ReplyKeyboardMarkup, KeyboardButton
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = KeyboardButton("/start")
     btn2 = KeyboardButton("/secure")
