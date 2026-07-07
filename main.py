@@ -7,6 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.remote.remote_connection import RemoteConnection
 
 # ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -17,7 +18,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
 # ============ SELENIUM REMOTE ============
-SELENIUM_URL = os.environ.get("SELENIUM_REMOTE_URL", "http://standalone-chrome.railway.internal:4444/wd/hub")
+SELENIUM_URL = os.environ.get("SELENIUM_REMOTE_URL", "https://standalone-chrome-production-c25f.up.railway.app/wd/hub")
 
 def create_browser():
     options = ChromeOptions()
@@ -26,11 +27,28 @@ def create_browser():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
     
+    # إعدادات إضافية لـ Microsoft Login
+    options.add_argument("--disable-features=NetworkService,NetworkServiceInProcess")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    options.add_argument("--disable-default-apps")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-plugins")
+    options.add_argument("--disable-translate")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--ignore-certificate-errors")
+    options.add_argument("--allow-insecure-localhost")
+
     driver = webdriver.Remote(
         command_executor=SELENIUM_URL,
         options=options
     )
+    driver.set_page_load_timeout(60)
+    driver.implicitly_wait(10)
     return driver
 
 def human_typing(element, text):
