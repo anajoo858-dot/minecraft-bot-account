@@ -2,12 +2,14 @@ import telebot
 import time
 import os
 import random
+import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.remote.remote_connection import RemoteConnection
+from selenium.webdriver.common.action_chains import ActionChains
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -18,7 +20,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
 # ============ SELENIUM REMOTE ============
-SELENIUM_URL = os.environ.get("SELENIUM_REMOTE_URL", "https://standalone-chrome-production-c25f.up.railway.app/wd/hub")
+SELENIUM_URL = os.environ.get("SELENIUM_REMOTE_URL", "https://standalone-chrome-production-c25f.up.railway.app")
 
 def create_browser():
     options = ChromeOptions()
@@ -26,35 +28,40 @@ def create_browser():
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--window-size=1366,768")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    # إعدادات إضافية لـ Microsoft Login
-    options.add_argument("--disable-features=NetworkService,NetworkServiceInProcess")
-    options.add_argument("--disable-background-networking")
-    options.add_argument("--disable-sync")
-    options.add_argument("--disable-default-apps")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--disable-plugins")
-    options.add_argument("--disable-translate")
-    options.add_argument("--disable-popup-blocking")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--allow-insecure-localhost")
-
     driver = webdriver.Remote(
         command_executor=SELENIUM_URL,
         options=options
     )
     driver.set_page_load_timeout(60)
-    driver.implicitly_wait(10)
     return driver
 
 def human_typing(element, text):
     for char in text:
         element.send_keys(char)
         time.sleep(random.uniform(0.05, 0.12))
+
+# ============ SELENIUM STATUS ============
+def check_selenium_status():
+    try:
+        response = requests.get(f"{SELENIUM_URL}/status", timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("value", {}).get("ready", False):
+                return True, "✅ Selenium is running and ready!"
+            else:
+                return False, "⚠️ Selenium is running but not ready."
+        else:
+            return False, f"❌ Selenium returned status code: {response.status_code}"
+    except requests.exceptions.ConnectionError:
+        return False, "❌ Cannot connect to Selenium. Make sure it's running."
+    except Exception as e:
+        return False, f"❌ Error checking Selenium: {str(e)[:100]}"
 
 # ============ LOGIN ============
 def login_microsoft(driver, email, password):
@@ -146,6 +153,17 @@ def check_minecraft_license(driver):
     except:
         return "⚠️ Could not verify license."
 
+# ============ KEYBOARD MENU ============
+def get_main_menu():
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    btn1 = KeyboardButton("/start")
+    btn2 = KeyboardButton("/secure")
+    btn3 = KeyboardButton("/selenium")
+    btn4 = KeyboardButton("/cancel")
+    btn5 = KeyboardButton("/help")
+    markup.add(btn1, btn2, btn3, btn4, btn5)
+    return markup
+
 # ============ TELEGRAM COMMANDS ============
 @bot.message_handler(commands=['start'])
 def start(msg):
@@ -154,10 +172,38 @@ def start(msg):
         "📌 *Available Commands:*\n"
         "`/secure <email> <pass> <new_email> <new_pass>`\n"
         "`/code <code>`\n"
-        "`/cancel`\n\n"
+        "`/selenium` - Check Selenium status\n"
+        "`/cancel`\n"
+        "`/help`\n\n"
         "📝 *Example:*\n"
         "`/secure old@outlook.com OldPass123 new@email.com NewPass456`",
-        parse_mode="Markdown")
+        parse_mode="Markdown",
+        reply_markup=get_main_menu())
+
+@bot.message_handler(commands=['help'])
+def help(msg):
+    bot.reply_to(msg,
+        "📌 *Available Commands:*\n\n"
+        "🔹 `/secure <email> <pass> <new_email> <new_pass>`\n"
+        "   Change email and password of a Minecraft account.\n\n"
+        "🔹 `/code <code>`\n"
+        "   Enter 2FA verification code.\n\n"
+        "🔹 `/selenium`\n"
+        "   Check if Selenium is running properly.\n\n"
+        "🔹 `/cancel`\n"
+        "   Cancel current session.\n\n"
+        "🔹 `/start`\n"
+        "   Show main menu.\n\n"
+        "🔹 `/help`\n"
+        "   Show this help message.",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu())
+
+@bot.message_handler(commands=['selenium'])
+def selenium_status(msg):
+    bot.reply_to(msg, "⏳ *Checking Selenium status...*", parse_mode="Markdown")
+    status, message = check_selenium_status()
+    bot.reply_to(msg, message, parse_mode="Markdown", reply_markup=get_main_menu())
 
 @bot.message_handler(commands=['secure'])
 def secure(msg):
@@ -166,7 +212,8 @@ def secure(msg):
         bot.reply_to(msg,
             "❌ *Usage:*\n"
             "`/secure <email> <pass> <new_email> <new_pass>`",
-            parse_mode="Markdown")
+            parse_mode="Markdown",
+            reply_markup=get_main_menu())
         return
 
     old_email, old_pass, new_email, new_pass = args[1], args[2], args[3], args[4]
@@ -193,7 +240,8 @@ def secure(msg):
         bot.reply_to(msg,
             "🔐 *2FA Required!*\n"
             "Send `/code <code>`",
-            parse_mode="Markdown")
+            parse_mode="Markdown",
+            reply_markup=get_main_menu())
         user_sessions[chat_id]["step"] = "2fa"
         return
 
@@ -212,7 +260,8 @@ def secure(msg):
         f"✅ *Account Secured!*\n"
         f"📧 *New Email:* `{new_email}`\n"
         f"🔑 *New Password:* `{new_pass}`",
-        parse_mode="Markdown")
+        parse_mode="Markdown",
+        reply_markup=get_main_menu())
 
     driver.quit()
     del user_sessions[chat_id]
@@ -255,7 +304,8 @@ def code(msg):
             f"✅ *Account Secured!*\n"
             f"📧 *New Email:* `{new_email}`\n"
             f"🔑 *New Password:* `{new_pass}`",
-            parse_mode="Markdown")
+            parse_mode="Markdown",
+            reply_markup=get_main_menu())
 
         driver.quit()
         del user_sessions[chat_id]
@@ -269,9 +319,9 @@ def cancel(msg):
     if chat_id in user_sessions:
         user_sessions[chat_id]["driver"].quit()
         del user_sessions[chat_id]
-        bot.reply_to(msg, "✅ *Session cancelled.*", parse_mode="Markdown")
+        bot.reply_to(msg, "✅ *Session cancelled.*", parse_mode="Markdown", reply_markup=get_main_menu())
     else:
-        bot.reply_to(msg, "❌ *No active session.*", parse_mode="Markdown")
+        bot.reply_to(msg, "❌ *No active session.*", parse_mode="Markdown", reply_markup=get_main_menu())
 
 @bot.message_handler(func=lambda m: True)
 def fallback(msg):
@@ -279,8 +329,11 @@ def fallback(msg):
         "📌 *Available Commands:*\n"
         "`/secure <email> <pass> <new_email> <new_pass>`\n"
         "`/code <code>`\n"
-        "`/cancel`",
-        parse_mode="Markdown")
+        "`/selenium`\n"
+        "`/cancel`\n"
+        "`/help`",
+        parse_mode="Markdown",
+        reply_markup=get_main_menu())
 
 # ============ RUN BOT ============
 if __name__ == "__main__":
