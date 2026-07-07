@@ -1,3 +1,4 @@
 pyTelegramBotAPI
-selenium
 requests
+selenium
+selenium-stealth
