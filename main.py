@@ -2,7 +2,6 @@ import telebot
 import time
 import os
 import random
-import requests
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -19,9 +18,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
-# ============ SELENIUM REMOTE ============
-SELENIUM_URL = os.environ.get("SELENIUM_REMOTE_URL", "https://standalone-chrome-production-c25f.up.railway.app")
-
+# ============ SELENIUM (LOCAL) ============
 def create_browser():
     options = ChromeOptions()
     options.add_argument("--headless=new")
@@ -34,10 +31,7 @@ def create_browser():
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    driver = webdriver.Remote(
-        command_executor=SELENIUM_URL,
-        options=options
-    )
+    driver = webdriver.Chrome(options=options)
     
     # ========== إخفاء أثر Selenium ==========
     stealth(driver,
@@ -55,21 +49,6 @@ def human_typing(element, text):
     for char in text:
         element.send_keys(char)
         time.sleep(random.uniform(0.05, 0.12))
-
-# ============ SELENIUM STATUS ============
-def check_selenium_status():
-    try:
-        response = requests.get(f"{SELENIUM_URL}/status", timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("value", {}).get("ready", False):
-                return True, "✅ Selenium is running and ready!"
-            else:
-                return False, "⚠️ Selenium is running but not ready."
-        else:
-            return False, f"❌ Selenium returned status code: {response.status_code}"
-    except:
-        return False, "❌ Cannot connect to Selenium."
 
 # ============ LOGIN ============
 def login_microsoft(driver, email, password):
@@ -166,10 +145,9 @@ def get_main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = KeyboardButton("/start")
     btn2 = KeyboardButton("/secure")
-    btn3 = KeyboardButton("/selenium")
-    btn4 = KeyboardButton("/cancel")
-    btn5 = KeyboardButton("/help")
-    markup.add(btn1, btn2, btn3, btn4, btn5)
+    btn3 = KeyboardButton("/cancel")
+    btn4 = KeyboardButton("/help")
+    markup.add(btn1, btn2, btn3, btn4)
     return markup
 
 # ============ TELEGRAM COMMANDS ============
@@ -180,7 +158,6 @@ def start(msg):
         "📌 *Available Commands:*\n"
         "`/secure <email> <pass> <new_email> <new_pass>`\n"
         "`/code <code>`\n"
-        "`/selenium` - Check Selenium status\n"
         "`/cancel`\n"
         "`/help`\n\n"
         "📝 *Example:*\n"
@@ -196,8 +173,6 @@ def help(msg):
         "   Change email and password of a Minecraft account.\n\n"
         "🔹 `/code <code>`\n"
         "   Enter 2FA verification code.\n\n"
-        "🔹 `/selenium`\n"
-        "   Check if Selenium is running properly.\n\n"
         "🔹 `/cancel`\n"
         "   Cancel current session.\n\n"
         "🔹 `/start`\n"
@@ -206,12 +181,6 @@ def help(msg):
         "   Show this help message.",
         parse_mode="Markdown",
         reply_markup=get_main_menu())
-
-@bot.message_handler(commands=['selenium'])
-def selenium_status(msg):
-    bot.reply_to(msg, "⏳ *Checking Selenium status...*", parse_mode="Markdown")
-    status, message = check_selenium_status()
-    bot.reply_to(msg, message, parse_mode="Markdown", reply_markup=get_main_menu())
 
 @bot.message_handler(commands=['secure'])
 def secure(msg):
@@ -337,7 +306,6 @@ def fallback(msg):
         "📌 *Available Commands:*\n"
         "`/secure <email> <pass> <new_email> <new_pass>`\n"
         "`/code <code>`\n"
-        "`/selenium`\n"
         "`/cancel`\n"
         "`/help`",
         parse_mode="Markdown",
