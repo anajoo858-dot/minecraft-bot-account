@@ -8,8 +8,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.common.action_chains import ActionChains
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from selenium_stealth import stealth
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -38,7 +38,17 @@ def create_browser():
         command_executor=SELENIUM_URL,
         options=options
     )
-    driver.set_page_load_timeout(60)
+    
+    # ========== إخفاء أثر Selenium ==========
+    stealth(driver,
+        languages=["en-US", "en"],
+        vendor="Google Inc.",
+        platform="Win32",
+        webgl_vendor="Intel Inc.",
+        renderer="Intel Iris OpenGL Engine",
+        fix_hairline=True,
+    )
+    
     return driver
 
 def human_typing(element, text):
@@ -58,10 +68,8 @@ def check_selenium_status():
                 return False, "⚠️ Selenium is running but not ready."
         else:
             return False, f"❌ Selenium returned status code: {response.status_code}"
-    except requests.exceptions.ConnectionError:
-        return False, "❌ Cannot connect to Selenium. Make sure it's running."
-    except Exception as e:
-        return False, f"❌ Error checking Selenium: {str(e)[:100]}"
+    except:
+        return False, "❌ Cannot connect to Selenium."
 
 # ============ LOGIN ============
 def login_microsoft(driver, email, password):
