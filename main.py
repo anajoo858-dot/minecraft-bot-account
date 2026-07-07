@@ -8,7 +8,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
+# ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise Exception("BOT_TOKEN not set!")
@@ -16,6 +18,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
+# ============ BROWSER ============
 def create_browser():
     options = ChromeOptions()
     options.add_argument("--headless")
@@ -25,10 +28,7 @@ def create_browser():
     options.add_argument("--window-size=1920,1080")
     options.add_argument("--remote-debugging-port=9222")
     
-    # استخدام Chromium المثبت على Railway
-    options.binary_location = "/usr/bin/chromium-browser"
-    
-    service = Service("/usr/bin/chromedriver")
+    service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
@@ -37,6 +37,7 @@ def human_typing(element, text):
         element.send_keys(char)
         time.sleep(random.uniform(0.05, 0.12))
 
+# ============ LOGIN ============
 def login_microsoft(driver, email, password):
     try:
         driver.get("https://login.live.com")
@@ -59,6 +60,7 @@ def login_microsoft(driver, email, password):
     except Exception as e:
         return str(e)
 
+# ============ CHANGE PASSWORD ============
 def change_password(driver, current_password, new_password):
     try:
         driver.get("https://account.live.com/password/change")
@@ -76,10 +78,11 @@ def change_password(driver, current_password, new_password):
 
         driver.find_element(By.ID, "iSave").click()
         time.sleep(3)
-        return "✅ تم تغيير كلمة المرور بنجاح!"
+        return "✅ Password changed successfully!"
     except Exception as e:
-        return f"❌ فشل تغيير كلمة المرور: {str(e)[:100]}"
+        return f"❌ Failed to change password: {str(e)[:100]}"
 
+# ============ UPDATE EMAIL ============
 def update_email(driver, new_email):
     try:
         driver.get("https://account.live.com/names/manage")
@@ -105,10 +108,11 @@ def update_email(driver, new_email):
             time.sleep(1)
             break
 
-        return "✅ تم إضافة الإيميل الجديد وجعله الأساسي!"
+        return "✅ New email added and set as primary!"
     except Exception as e:
-        return f"⚠️ حدث خطأ أثناء تحديث الإيميل: {str(e)[:100]}"
+        return f"⚠️ Error updating email: {str(e)[:100]}"
 
+# ============ CHECK MINECRAFT LICENSE ============
 def check_minecraft_license(driver):
     try:
         driver.get("https://www.minecraft.net/en-us/profile")
@@ -116,63 +120,79 @@ def check_minecraft_license(driver):
         if "profile" in driver.current_url:
             try:
                 username = driver.find_element(By.CLASS_NAME, "profile-name").text
-                return f"✅ الحساب يملك رخصة ماينكرافت. اسم المستخدم: {username}"
+                return f"✅ Account has Minecraft license. Username: `{username}`"
             except:
                 pass
-        return "⚠️ لم يتم العثور على رخصة ماينكرافت"
+        return "⚠️ No Minecraft license found on this account."
     except:
-        return "⚠️ تعذر التحقق"
+        return "⚠️ Could not verify license."
 
+# ============ TELEGRAM COMMANDS ============
 @bot.message_handler(commands=['start'])
 def start(msg):
     bot.reply_to(msg,
-        "🔐 **بوت تغيير بيانات ماينكرافت**\n\n"
-        "/secure <email> <pass> <new_email> <new_pass>\n"
-        "/code <code>\n"
-        "/cancel")
+        "🔐 *Minecraft Account Security Bot*\n\n"
+        "📌 *Available Commands:*\n"
+        "`/secure <email> <pass> <new_email> <new_pass>`\n"
+        "`/code <code>`\n"
+        "`/cancel`\n\n"
+        "📝 *Example:*\n"
+        "`/secure old@outlook.com OldPass123 new@email.com NewPass456`",
+        parse_mode="Markdown")
 
 @bot.message_handler(commands=['secure'])
 def secure(msg):
     args = msg.text.split()
     if len(args) < 5:
-        bot.reply_to(msg, "❌ /secure <email> <pass> <new_email> <new_pass>")
+        bot.reply_to(msg,
+            "❌ *Usage:*\n"
+            "`/secure <email> <pass> <new_email> <new_pass>`",
+            parse_mode="Markdown")
         return
 
     old_email, old_pass, new_email, new_pass = args[1], args[2], args[3], args[4]
     chat_id = msg.chat.id
 
-    bot.reply_to(msg, f"⏳ جاري تسجيل الدخول...")
+    bot.reply_to(msg, f"⏳ *Logging in to:* `{old_email}`...", parse_mode="Markdown")
 
     try:
         driver = create_browser()
     except Exception as e:
-        bot.reply_to(msg, f"❌ خطأ في المتصفح: {str(e)[:200]}")
+        bot.reply_to(msg, f"❌ *Browser error:* `{str(e)[:200]}`", parse_mode="Markdown")
         return
 
-    user_sessions[chat_id] = {"driver": driver, "old_pass": old_pass, "new_email": new_email, "new_pass": new_pass}
+    user_sessions[chat_id] = {
+        "driver": driver,
+        "old_pass": old_pass,
+        "new_email": new_email,
+        "new_pass": new_pass
+    }
 
     result = login_microsoft(driver, old_email, old_pass)
 
     if result == "2fa":
-        bot.reply_to(msg, "🔐 التفعيل بخطوتين مفعل!\nأرسل /code <الرمز>")
+        bot.reply_to(msg,
+            "🔐 *2FA Required!*\n"
+            "Send `/code <code>`",
+            parse_mode="Markdown")
         user_sessions[chat_id]["step"] = "2fa"
         return
 
     if result != "success":
-        bot.reply_to(msg, f"❌ فشل تسجيل الدخول: {result}")
+        bot.reply_to(msg, f"❌ *Login failed:* `{result}`", parse_mode="Markdown")
         driver.quit()
         del user_sessions[chat_id]
         return
 
-    bot.reply_to(msg, "✅ تم تسجيل الدخول!")
-    bot.reply_to(msg, check_minecraft_license(driver))
-    bot.reply_to(msg, update_email(driver, new_email))
-    bot.reply_to(msg, change_password(driver, old_pass, new_pass))
+    bot.reply_to(msg, "✅ *Logged in successfully!*", parse_mode="Markdown")
+    bot.reply_to(msg, check_minecraft_license(driver), parse_mode="Markdown")
+    bot.reply_to(msg, update_email(driver, new_email), parse_mode="Markdown")
+    bot.reply_to(msg, change_password(driver, old_pass, new_pass), parse_mode="Markdown")
 
     bot.reply_to(msg,
-        f"✅ **تم التحديث!**\n"
-        f"📧 الإيميل الجديد: `{new_email}`\n"
-        f"🔑 الباسورد الجديد: `{new_pass}`",
+        f"✅ *Account Secured!*\n"
+        f"📧 *New Email:* `{new_email}`\n"
+        f"🔑 *New Password:* `{new_pass}`",
         parse_mode="Markdown")
 
     driver.quit()
@@ -182,18 +202,18 @@ def secure(msg):
 def code(msg):
     args = msg.text.split()
     if len(args) < 2:
-        bot.reply_to(msg, "❌ /code <code>")
+        bot.reply_to(msg, "❌ *Usage:* `/code <code>`", parse_mode="Markdown")
         return
 
     code = args[1]
     chat_id = msg.chat.id
 
     if chat_id not in user_sessions or user_sessions[chat_id].get("step") != "2fa":
-        bot.reply_to(msg, "❌ لا توجد جلسة نشطة.")
+        bot.reply_to(msg, "❌ *No active session waiting for 2FA.*", parse_mode="Markdown")
         return
 
     driver = user_sessions[chat_id]["driver"]
-    bot.reply_to(msg, "⏳ جاري التحقق...")
+    bot.reply_to(msg, "⏳ *Verifying code...*", parse_mode="Markdown")
 
     try:
         wait = WebDriverWait(driver, 30)
@@ -202,27 +222,27 @@ def code(msg):
         driver.find_element(By.ID, "iVerify").click()
         time.sleep(3)
 
-        bot.reply_to(msg, "✅ تم التحقق!")
+        bot.reply_to(msg, "✅ *2FA Verified!*", parse_mode="Markdown")
 
         old_pass = user_sessions[chat_id]["old_pass"]
         new_email = user_sessions[chat_id]["new_email"]
         new_pass = user_sessions[chat_id]["new_pass"]
 
-        bot.reply_to(msg, check_minecraft_license(driver))
-        bot.reply_to(msg, update_email(driver, new_email))
-        bot.reply_to(msg, change_password(driver, old_pass, new_pass))
+        bot.reply_to(msg, check_minecraft_license(driver), parse_mode="Markdown")
+        bot.reply_to(msg, update_email(driver, new_email), parse_mode="Markdown")
+        bot.reply_to(msg, change_password(driver, old_pass, new_pass), parse_mode="Markdown")
 
         bot.reply_to(msg,
-            f"✅ **تم التحديث!**\n"
-            f"📧 الإيميل الجديد: `{new_email}`\n"
-            f"🔑 الباسورد الجديد: `{new_pass}`",
+            f"✅ *Account Secured!*\n"
+            f"📧 *New Email:* `{new_email}`\n"
+            f"🔑 *New Password:* `{new_pass}`",
             parse_mode="Markdown")
 
         driver.quit()
         del user_sessions[chat_id]
 
     except Exception as e:
-        bot.reply_to(msg, f"❌ فشل التحقق: {str(e)[:100]}")
+        bot.reply_to(msg, f"❌ *Verification failed:* `{str(e)[:100]}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['cancel'])
 def cancel(msg):
@@ -230,16 +250,22 @@ def cancel(msg):
     if chat_id in user_sessions:
         user_sessions[chat_id]["driver"].quit()
         del user_sessions[chat_id]
-        bot.reply_to(msg, "✅ تم الإلغاء.")
+        bot.reply_to(msg, "✅ *Session cancelled.*", parse_mode="Markdown")
     else:
-        bot.reply_to(msg, "❌ لا توجد جلسة.")
+        bot.reply_to(msg, "❌ *No active session.*", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: True)
 def fallback(msg):
-    bot.reply_to(msg, "📌 /secure <email> <pass> <new_email> <new_pass>")
+    bot.reply_to(msg,
+        "📌 *Available Commands:*\n"
+        "`/secure <email> <pass> <new_email> <new_pass>`\n"
+        "`/code <code>`\n"
+        "`/cancel`",
+        parse_mode="Markdown")
 
+# ============ RUN BOT ============
 if __name__ == "__main__":
-    print("✅ البوت يعمل!")
+    print("✅ Bot is running!")
     while True:
         try:
             bot.polling(none_stop=True, interval=1)
