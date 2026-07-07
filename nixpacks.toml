@@ -1,0 +1,5 @@
+[build]
+install = ["chromium", "chromedriver"]
+
+[phases.setup]
+nixPkgs = ["chromium", "chromedriver"]
