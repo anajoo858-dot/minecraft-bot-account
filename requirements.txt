@@ -1,3 +1,4 @@
 pyTelegramBotAPI
 requests
 selenium
+webdriver-manager
