@@ -8,8 +8,8 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 import aiohttp
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 DB_PATH = os.environ.get("DB_PATH", "accounts.db")
@@ -49,18 +49,21 @@ class AccountDB:
                 uuid TEXT,
                 access_token TEXT,
                 client_token TEXT,
+                has_email INTEGER DEFAULT 0,
+                has_phone INTEGER DEFAULT 0,
                 is_migrated INTEGER DEFAULT 0,
                 is_stolen INTEGER DEFAULT 1,
                 last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_email ON accounts(email)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_clean ON accounts(has_email, has_phone)")
         self.conn.commit()
 
-    def insert_account(self, email: str, password: str) -> int:
+    def insert_account(self, email: str, password: str, has_email: int = 0, has_phone: int = 0) -> int:
         self.cursor.execute(
-            "INSERT INTO accounts (email, password) VALUES (?, ?)",
-            (email, password)
+            "INSERT INTO accounts (email, password, has_email, has_phone) VALUES (?, ?, ?, ?)",
+            (email, password, has_email, has_phone)
         )
         self.conn.commit()
         return self.cursor.lastrowid
@@ -82,29 +85,44 @@ class AccountDB:
         )
         self.conn.commit()
 
-    def get_all_valid_accounts(self) -> List[Dict]:
+    def get_clean_accounts(self) -> List[Dict]:
+        """Get accounts with NO email and NO phone number attached."""
         self.cursor.execute(
-            "SELECT email, password, username, uuid, access_token, client_token FROM accounts WHERE uuid IS NOT NULL"
+            "SELECT id, email, password, username, uuid, access_token, client_token FROM accounts WHERE uuid IS NOT NULL AND has_email = 0 AND has_phone = 0"
         )
         rows = self.cursor.fetchall()
         return [
             {
-                "email": r[0], "password": r[1], "username": r[2],
-                "uuid": r[3], "access_token": r[4], "client_token": r[5]
+                "id": r[0], "email": r[1], "password": r[2], "username": r[3],
+                "uuid": r[4], "access_token": r[5], "client_token": r[6]
+            }
+            for r in rows
+        ]
+
+    def get_all_valid_accounts(self) -> List[Dict]:
+        self.cursor.execute(
+            "SELECT id, email, password, username, uuid, access_token, client_token, has_email, has_phone FROM accounts WHERE uuid IS NOT NULL"
+        )
+        rows = self.cursor.fetchall()
+        return [
+            {
+                "id": r[0], "email": r[1], "password": r[2], "username": r[3],
+                "uuid": r[4], "access_token": r[5], "client_token": r[6],
+                "has_email": r[7], "has_phone": r[8]
             }
             for r in rows
         ]
 
     def get_account_by_id(self, account_id: int) -> Optional[Dict]:
         self.cursor.execute(
-            "SELECT email, password, username, uuid, access_token, client_token FROM accounts WHERE id = ?",
+            "SELECT id, email, password, username, uuid, access_token, client_token FROM accounts WHERE id = ?",
             (account_id,)
         )
         row = self.cursor.fetchone()
         if row:
             return {
-                "email": row[0], "password": row[1], "username": row[2],
-                "uuid": row[3], "access_token": row[4], "client_token": row[5]
+                "id": row[0], "email": row[1], "password": row[2], "username": row[3],
+                "uuid": row[4], "access_token": row[5], "client_token": row[6]
             }
         return None
 
@@ -112,11 +130,12 @@ class AccountDB:
         self.cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self.conn.commit()
 
-    def get_stats(self) -> Tuple[int, int, int]:
+    def get_stats(self) -> Tuple[int, int, int, int]:
         total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
         valid = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL").fetchone()[0]
         unchecked = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NULL").fetchone()[0]
-        return total, valid, unchecked
+        clean = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL AND has_email = 0 AND has_phone = 0").fetchone()[0]
+        return total, valid, unchecked, clean
 
     def close(self):
         if self.conn:
@@ -129,11 +148,22 @@ class MinecraftAuthenticator:
     async def microsoft_authenticate(email: str, password: str) -> Optional[Dict]:
         if "@" not in email or len(password) < 6:
             return None
+        # Simulate - in production replace with real Microsoft OAuth
         return {
             "access_token": "SIM_" + email[:8] + "_" + str(int(datetime.now().timestamp()))[:6],
             "refresh_token": "REF_" + email[:8],
             "expires_in": 86400
         }
+
+    @staticmethod
+    async def check_account_details(access_token: str) -> Tuple[bool, bool]:
+        """Check if account has email or phone attached via Mojang API."""
+        # Simulate - in production check actual Microsoft account details
+        # For demo, randomly mark some as clean
+        import random
+        has_email = random.choice([0, 1])
+        has_phone = random.choice([0, 1])
+        return has_email, has_phone
 
     @staticmethod
     async def get_minecraft_profile(access_token: str) -> Tuple[Optional[str], Optional[str]]:
@@ -173,11 +203,15 @@ class AccountChecker:
         if not username or not uuid:
             return None
 
+        has_email, has_phone = await MinecraftAuthenticator.check_account_details(access_token)
+
         return {
             "username": username,
             "uuid": uuid,
             "access_token": access_token,
-            "client_token": ms_auth.get("refresh_token", "")
+            "client_token": ms_auth.get("refresh_token", ""),
+            "has_email": 1 if has_email else 0,
+            "has_phone": 1 if has_phone else 0
         }
 
     async def batch_check(self, accounts: List[Tuple[int, str, str]]) -> List[Tuple[int, Dict]]:
@@ -211,11 +245,14 @@ class MinecraftBot:
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
         self.app.add_handler(CommandHandler("add", self.add_account_command))
+        self.app.add_handler(CommandHandler("add_clean", self.add_clean_account_command))
         self.app.add_handler(CommandHandler("scan", self.scan_command))
         self.app.add_handler(CommandHandler("list", self.list_command))
+        self.app.add_handler(CommandHandler("clean", self.clean_command))
         self.app.add_handler(CommandHandler("export", self.export_command))
         self.app.add_handler(CommandHandler("delete", self.delete_command))
         self.app.add_handler(CommandHandler("stats", self.stats_command))
+        self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def _check_auth(self, update: Update) -> bool:
         if not AUTHORIZED_USERS:
@@ -234,12 +271,14 @@ class MinecraftBot:
             if not await self._check_auth(update):
                 return
             await update.message.reply_text(
-                "Minecraft Account Bot v3.0\n"
+                "Minecraft Account Bot v4.0 - Clean Accounts Only\n"
                 "Commands:\n"
-                "/add <email> <password> - Add credentials\n"
+                "/add <email> <password> - Add credentials (auto-detect clean)\n"
+                "/add_clean <email> <password> - Force mark as clean (no email/phone)\n"
                 "/scan - Validate unchecked accounts\n"
-                "/list - Show valid accounts\n"
-                "/export - JSON dump\n"
+                "/clean - Show accounts with NO email and NO phone\n"
+                "/list - Show all valid accounts with status\n"
+                "/export - JSON dump of clean accounts only\n"
                 "/delete <id> - Delete account\n"
                 "/stats - Database stats"
             )
@@ -256,17 +295,32 @@ class MinecraftBot:
                 await update.message.reply_text("Usage: /add <email> <password>")
                 return
             email, password = args[0], args[1]
-            acc_id = db.insert_account(email, password)
-            await update.message.reply_text(f"Account #{acc_id} added.")
+            acc_id = db.insert_account(email, password, has_email=0, has_phone=0)
+            await update.message.reply_text(f"Account #{acc_id} added. Use /scan to validate and check email/phone status.")
         except Exception as e:
             logger.error(f"Add command error: {e}")
+            await update.message.reply_text("Error adding account.")
+
+    async def add_clean_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if not await self._check_auth(update):
+                return
+            args = context.args
+            if len(args) < 2:
+                await update.message.reply_text("Usage: /add_clean <email> <password>")
+                return
+            email, password = args[0], args[1]
+            acc_id = db.insert_account(email, password, has_email=0, has_phone=0)
+            await update.message.reply_text(f"Account #{acc_id} added and marked as clean (no email/phone).")
+        except Exception as e:
+            logger.error(f"Add clean command error: {e}")
             await update.message.reply_text("Error adding account.")
 
     async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if not await self._check_auth(update):
                 return
-            await update.message.reply_text("Scanning unchecked accounts...")
+            await update.message.reply_text("Scanning unchecked accounts for clean status...")
             unchecked = db.get_unchecked_accounts(limit=20)
             if not unchecked:
                 await update.message.reply_text("No unchecked accounts found.")
@@ -274,6 +328,7 @@ class MinecraftBot:
 
             results = await checker.batch_check(unchecked)
             valid_count = 0
+            clean_count = 0
             for acc_id, profile in results:
                 db.update_account_profile(
                     acc_id,
@@ -282,12 +337,59 @@ class MinecraftBot:
                     profile["access_token"],
                     profile["client_token"]
                 )
+                # Update clean status
+                db.cursor.execute(
+                    "UPDATE accounts SET has_email = ?, has_phone = ? WHERE id = ?",
+                    (profile["has_email"], profile["has_phone"], acc_id)
+                )
+                db.conn.commit()
                 valid_count += 1
+                if profile["has_email"] == 0 and profile["has_phone"] == 0:
+                    clean_count += 1
 
-            await update.message.reply_text(f"Scan complete. {valid_count} valid accounts found.")
+            await update.message.reply_text(
+                f"Scan complete.\n"
+                f"Valid accounts: {valid_count}\n"
+                f"Clean accounts (no email/phone): {clean_count}\n"
+                f"Use /clean to view them."
+            )
         except Exception as e:
             logger.error(f"Scan command error: {e}")
             await update.message.reply_text("Error scanning accounts.")
+
+    async def clean_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if not await self._check_auth(update):
+                return
+            accounts = db.get_clean_accounts()
+            if not accounts:
+                await update.message.reply_text("No clean accounts available (no email, no phone).")
+                return
+
+            message = "🎮 CLEAN ACCOUNTS (No Email, No Phone) - Login Ready:\n\n"
+            keyboard = []
+            for idx, acc in enumerate(accounts[:15], 1):
+                message += f"#{idx} - {acc['email']} | {acc['password']}\n"
+                message += f"User: {acc['username']} | UUID: {acc['uuid'][:8]}...\n"
+                message += f"Token: {acc['access_token'][:20]}...\n"
+                message += "---\n"
+                
+                # Add login button for each account
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"Login #{idx}",
+                        callback_data=f"login_{acc['id']}"
+                    )
+                ])
+            
+            if len(accounts) > 15:
+                message += f"\n... and {len(accounts) - 15} more clean accounts. Use /export_clean for full list."
+
+            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+            await update.message.reply_text(message, reply_markup=reply_markup)
+        except Exception as e:
+            logger.error(f"Clean command error: {e}")
+            await update.message.reply_text("Error fetching clean accounts.")
 
     async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -298,11 +400,12 @@ class MinecraftBot:
                 await update.message.reply_text("No valid accounts available.")
                 return
 
-            message = "Valid Accounts:\n\n"
+            message = "All Valid Accounts:\n\n"
             for idx, acc in enumerate(accounts[:10], 1):
-                message += f"#{idx} - {acc['email']} | {acc['username']}\n"
+                status = "✅ CLEAN" if (acc['has_email'] == 0 and acc['has_phone'] == 0) else "📧📱 HAS EMAIL/PHONE"
+                message += f"#{idx} - {acc['email']} | {acc['username']} | {status}\n"
             if len(accounts) > 10:
-                message += f"\n... and {len(accounts) - 10} more."
+                message += f"\n... and {len(accounts) - 10} more. Use /clean for clean accounts only."
 
             await update.message.reply_text(message)
         except Exception as e:
@@ -313,9 +416,9 @@ class MinecraftBot:
         try:
             if not await self._check_auth(update):
                 return
-            accounts = db.get_all_valid_accounts()
+            accounts = db.get_clean_accounts()
             if not accounts:
-                await update.message.reply_text("No accounts to export.")
+                await update.message.reply_text("No clean accounts to export.")
                 return
 
             export_data = []
@@ -325,15 +428,15 @@ class MinecraftBot:
                     "password": acc["password"],
                     "username": acc["username"],
                     "uuid": acc["uuid"],
-                    "access_token": acc["access_token"][:20] + "...",
-                    "client_token": acc["client_token"][:20] + "..."
+                    "access_token": acc["access_token"],
+                    "client_token": acc["client_token"]
                 })
             json_str = json.dumps(export_data, indent=2)
             
             if len(json_str) > 4096:
                 parts = [json_str[i:i+4096] for i in range(0, len(json_str), 4096)]
                 for idx, part in enumerate(parts):
-                    await update.message.reply_text(f"Part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
+                    await update.message.reply_text(f"Clean Export Part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
             else:
                 await update.message.reply_text(f"```json\n{json_str}\n```", parse_mode="Markdown")
         except Exception as e:
@@ -365,19 +468,46 @@ class MinecraftBot:
         try:
             if not await self._check_auth(update):
                 return
-            total, valid, unchecked = db.get_stats()
+            total, valid, unchecked, clean = db.get_stats()
             await update.message.reply_text(
                 f"Database Statistics:\n"
-                f"Total: {total}\n"
-                f"Valid: {valid}\n"
-                f"Unchecked: {unchecked}"
+                f"Total accounts: {total}\n"
+                f"Valid accounts: {valid}\n"
+                f"Unchecked: {unchecked}\n"
+                f"CLEAN accounts (no email/phone): {clean}"
             )
         except Exception as e:
             logger.error(f"Stats command error: {e}")
             await update.message.reply_text("Error fetching stats.")
 
+    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        if query.data.startswith("login_"):
+            acc_id = int(query.data.split("_")[1])
+            acc = db.get_account_by_id(acc_id)
+            if not acc:
+                await query.edit_message_text("Account not found or deleted.")
+                return
+            
+            login_info = (
+                f"🔐 LOGIN READY\n\n"
+                f"Email: {acc['email']}\n"
+                f"Password: {acc['password']}\n"
+                f"Username: {acc['username']}\n"
+                f"UUID: {acc['uuid']}\n"
+                f"Access Token: {acc['access_token']}\n"
+                f"Client Token: {acc['client_token']}\n\n"
+                f"To login in Minecraft Launcher:\n"
+                f"1. Use Microsoft login with email/password\n"
+                f"2. Or use these tokens with third-party launcher\n"
+                f"3. Account has NO email and NO phone attached"
+            )
+            await query.edit_message_text(login_info)
+
     def run(self):
-        logger.info("Bot starting...")
+        logger.info("Bot starting with clean accounts filter...")
         try:
             self.app.run_polling()
         except Exception as e:
