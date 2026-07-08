@@ -11,9 +11,8 @@ import aiohttp
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ========== CONFIGURATION ==========
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DB_PATH = os.environ.get("DB_PATH", "accounts.db")  # Use local file for Railway
+DB_PATH = os.environ.get("DB_PATH", "accounts.db")
 AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
 PROXY_LIST = os.environ.get("PROXY_LIST", "").split(",") if os.environ.get("PROXY_LIST") else []
 
@@ -24,7 +23,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ========== DATABASE LAYER ==========
 class AccountDB:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -126,7 +124,6 @@ class AccountDB:
 
 db = AccountDB(DB_PATH)
 
-# ========== AUTHENTICATION HANDLER ==========
 class MinecraftAuthenticator:
     @staticmethod
     async def microsoft_authenticate(email: str, password: str) -> Optional[Dict]:
@@ -152,7 +149,6 @@ class MinecraftAuthenticator:
                 logger.error(f"Profile fetch error: {e}")
                 return None, None
 
-# ========== ACCOUNT CHECKER ==========
 class AccountChecker:
     def __init__(self, proxy_list: List[str]):
         self.proxy_list = proxy_list
@@ -207,7 +203,6 @@ class AccountChecker:
 
 checker = AccountChecker(PROXY_LIST)
 
-# ========== TELEGRAM BOT HANDLERS ==========
 class MinecraftBot:
     def __init__(self, token: str):
         self.app = Application.builder().token(token).build()
@@ -384,12 +379,11 @@ class MinecraftBot:
     def run(self):
         logger.info("Bot starting...")
         try:
-            self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+            self.app.run_polling()
         except Exception as e:
             logger.error(f"Bot run error: {e}")
             sys.exit(1)
 
-# ========== ENTRY POINT ==========
 if __name__ == "__main__":
     if not BOT_TOKEN:
         logger.error("ERROR: BOT_TOKEN environment variable not set.")
