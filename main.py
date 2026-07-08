@@ -18,7 +18,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
-# ============ SELENIUM (DOCKER) ============
+# ============ SELENIUM ============
 def create_browser():
     options = ChromeOptions()
     options.add_argument("--headless=new")
