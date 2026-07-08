@@ -22,7 +22,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Account list with REAL Minecraft usernames
 ACCOUNT_DATA = [
     {"email": "leonyhoki@hotmail.com", "password": "leony123", "username": "leonyhoki"},
     {"email": "manuesper@hotmail.com", "password": "Novalee1971", "username": "manuesper"},
@@ -165,7 +164,7 @@ class AccountDB:
         self.cursor = self.conn.cursor()
         self._init_db()
         self._load_accounts()
-        self.last_shown_id = {}  # Track last shown account per user
+        self.shown_history = {}  # Track shown accounts per user
 
     def _init_db(self):
         self.cursor.execute("""
@@ -218,25 +217,46 @@ class AccountDB:
         self.cursor.execute("SELECT COUNT(*) FROM accounts")
         return self.cursor.fetchone()[0]
 
-    def get_available_account(self, exclude_id: int = None) -> Optional[Dict]:
-        if exclude_id:
-            self.cursor.execute("""
-                SELECT id, email, password, username, 
-                       hypixel_status, hypixel_rank, hypixel_banned,
-                       donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
-                       cubecraft_status, cubecraft_banned, cubecraft_rank,
-                       bedrock_owned
-                FROM accounts WHERE claimed_by = 0 AND id != ? LIMIT 1
-            """, (exclude_id,))
-        else:
-            self.cursor.execute("""
-                SELECT id, email, password, username, 
-                       hypixel_status, hypixel_rank, hypixel_banned,
-                       donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
-                       cubecraft_status, cubecraft_banned, cubecraft_rank,
-                       bedrock_owned
-                FROM accounts WHERE claimed_by = 0 LIMIT 1
-            """)
+    def get_available_accounts(self, limit: int = 10) -> List[Dict]:
+        self.cursor.execute("""
+            SELECT id, email, password, username, 
+                   hypixel_status, hypixel_rank, hypixel_banned,
+                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
+                   cubecraft_status, cubecraft_banned, cubecraft_rank,
+                   bedrock_owned
+            FROM accounts WHERE claimed_by = 0 LIMIT ?
+        """, (limit,))
+        rows = self.cursor.fetchall()
+        accounts = []
+        for row in rows:
+            accounts.append({
+                "id": row[0],
+                "email": row[1],
+                "password": row[2],
+                "username": row[3],
+                "hypixel_status": row[4] or "unknown",
+                "hypixel_rank": row[5] or "NONE",
+                "hypixel_banned": row[6] or 0,
+                "donutsmp_status": row[7] or "unknown",
+                "donutsmp_banned": row[8] or 0,
+                "donutsmp_kills": row[9] or 0,
+                "donutsmp_deaths": row[10] or 0,
+                "cubecraft_status": row[11] or "unknown",
+                "cubecraft_banned": row[12] or 0,
+                "cubecraft_rank": row[13] or "NONE",
+                "bedrock_owned": row[14] or 0
+            })
+        return accounts
+
+    def get_available_account(self) -> Optional[Dict]:
+        self.cursor.execute("""
+            SELECT id, email, password, username, 
+                   hypixel_status, hypixel_rank, hypixel_banned,
+                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
+                   cubecraft_status, cubecraft_banned, cubecraft_rank,
+                   bedrock_owned
+            FROM accounts WHERE claimed_by = 0 LIMIT 1
+        """)
         row = self.cursor.fetchone()
         if row:
             return {
@@ -333,11 +353,18 @@ class AccountDB:
             "claimed": self.get_claimed_count()
         }
 
-    def get_last_shown(self, user_id: int) -> int:
-        return self.last_shown_id.get(user_id, None)
+    def get_shown_history(self, user_id: int) -> List[int]:
+        return self.shown_history.get(user_id, [])
 
-    def set_last_shown(self, user_id: int, account_id: int):
-        self.last_shown_id[user_id] = account_id
+    def add_shown_history(self, user_id: int, account_id: int):
+        if user_id not in self.shown_history:
+            self.shown_history[user_id] = []
+        if account_id not in self.shown_history[user_id]:
+            self.shown_history[user_id].append(account_id)
+
+    def clear_shown_history(self, user_id: int):
+        if user_id in self.shown_history:
+            self.shown_history[user_id] = []
 
 db = AccountDB()
 
@@ -456,6 +483,9 @@ class MinecraftBot:
         cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
         bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
         
+        # Get remaining available count
+        remaining = db.get_available_count()
+        
         message = (
             f"🎮 AVAILABLE ACCOUNT #{account['id']}\n"
             f"═══════════════════════════\n\n"
@@ -477,6 +507,7 @@ class MinecraftBot:
             f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
             f"🎮 BEDROCK EDITION\n"
             f"   Owned: {bedrock_emoji}\n\n"
+            f"📊 Remaining stock: {remaining}\n\n"
             f"⚠️ This account is NOT claimed yet.\n"
             f"Click 'CLAIM ACCOUNT' to make it YOURS."
         )
@@ -552,27 +583,35 @@ class MinecraftBot:
                     )
                     return
                 
-                # Get last shown account ID for this user
-                last_shown = db.get_last_shown(update.effective_user.id)
+                # Get ALL available accounts
+                all_available = db.get_available_accounts(limit=50)
                 
-                # Get a NEW account (different from last shown)
-                account = db.get_available_account(exclude_id=last_shown)
-                
-                # If no account found (maybe only one available), get any
-                if not account:
-                    account = db.get_available_account()
-                
-                if not account:
+                if not all_available:
                     await query.edit_message_text(
                         "❌ No accounts available!\n"
                         "All accounts have been claimed."
                     )
                     return
                 
-                # Store this as the last shown account for this user
-                db.set_last_shown(update.effective_user.id, account["id"])
+                # Get shown history for this user
+                shown_ids = db.get_shown_history(update.effective_user.id)
                 
-                # Update server status for this account
+                # Filter out already shown accounts
+                available_not_shown = [acc for acc in all_available if acc["id"] not in shown_ids]
+                
+                # If all accounts have been shown, reset history
+                if not available_not_shown:
+                    db.clear_shown_history(update.effective_user.id)
+                    shown_ids = []
+                    available_not_shown = all_available
+                
+                # Pick the first available account that hasn't been shown
+                account = available_not_shown[0]
+                
+                # Add to shown history
+                db.add_shown_history(update.effective_user.id, account["id"])
+                
+                # Update server status
                 server_data = await ServerChecker.check_all(
                     account["email"], 
                     account["password"]
@@ -585,39 +624,34 @@ class MinecraftBot:
             elif query.data.startswith("claim_"):
                 account_id = int(query.data.split("_")[1])
                 
-                # Check if user already has a claimed account
                 existing = db.get_account_by_user(update.effective_user.id)
                 if existing:
                     await query.edit_message_text(
                         f"❌ You already have an account claimed!\n\n"
                         f"📧 Email: {existing['email']}\n"
-                        f"🎮 Username: {existing['username']}\n"
-                        f"Use /myaccount to view it.\n"
-                        f"Use /release to give it back."
+                        f"🎮 Username: {existing['username']}"
                     )
                     return
                 
-                # Verify account exists and is available
                 self.cursor = db.conn.cursor()
                 self.cursor.execute("SELECT id FROM accounts WHERE id = ? AND claimed_by = 0", (account_id,))
                 row = self.cursor.fetchone()
                 
                 if not row:
                     await query.edit_message_text(
-                        "❌ This account was already claimed by someone else!\n"
-                        "Click 'SHOW ANOTHER' to see a different account."
+                        "❌ This account was already claimed!\n"
+                        "Click 'SHOW ANOTHER' for a different account."
                     )
                     return
                 
-                # Claim the account
                 db.claim_account(account_id, update.effective_user.id)
+                db.clear_shown_history(update.effective_user.id)
                 
-                # Get the claimed account
                 claimed = db.get_account_by_user(update.effective_user.id)
                 if claimed:
                     await self._display_claimed_account(query, claimed)
                 else:
-                    await query.edit_message_text("✅ Account claimed successfully! Use /myaccount to view it.")
+                    await query.edit_message_text("✅ Account claimed successfully!")
             
             elif query.data == "view_stats":
                 stats = db.get_stats()
@@ -632,8 +666,7 @@ class MinecraftBot:
                     f"═══════════════════════════\n\n"
                     f"📦 Total accounts: {stats['total']}\n"
                     f"✅ Available: {stats['available']}\n"
-                    f"🔒 Claimed: {stats['claimed']}\n\n"
-                    f"📌 Each account can only be claimed once.",
+                    f"🔒 Claimed: {stats['claimed']}",
                     reply_markup=reply_markup
                 )
             
@@ -663,9 +696,7 @@ class MinecraftBot:
                     f"═══════════════════════════\n\n"
                     f"📦 Total accounts: {stats['total']}\n"
                     f"✅ Available: {stats['available']}\n"
-                    f"🔒 Claimed: {stats['claimed']}\n\n"
-                    f"Click 'SHOW ACCOUNT' to view an account.\n"
-                    f"Then click 'CLAIM ACCOUNT' to claim it.",
+                    f"🔒 Claimed: {stats['claimed']}",
                     reply_markup=reply_markup
                 )
                 
