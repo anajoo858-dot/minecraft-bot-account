@@ -22,8 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Account list with REAL Minecraft usernames extracted from the emails
-# Each account's Minecraft username is the part before @
+# Account list with REAL Minecraft usernames
 ACCOUNT_DATA = [
     {"email": "leonyhoki@hotmail.com", "password": "leony123", "username": "leonyhoki"},
     {"email": "manuesper@hotmail.com", "password": "Novalee1971", "username": "manuesper"},
@@ -328,7 +327,6 @@ db = AccountDB()
 class ServerChecker:
     @staticmethod
     async def check_all(email: str, password: str) -> Dict:
-        """Simulate checking all servers and bedrock ownership."""
         statuses = ["online", "offline", "unknown"]
         ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
         cubecraft_ranks = ["NONE", "IRON", "GOLD", "DIAMOND", "EMERALD", "OBSIDIAN"]
@@ -351,6 +349,7 @@ class MinecraftBot:
     def __init__(self, token: str):
         self.app = Application.builder().token(token).build()
         self._register_handlers()
+        self.user_shown_account = {}  # Track which account was shown to user
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
@@ -374,10 +373,9 @@ class MinecraftBot:
         stats = db.get_stats()
         
         keyboard = [
-            [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+            [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
             [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
-            [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")],
-            [InlineKeyboardButton("🔄 REFRESH STATUS", callback_data="refresh_status")]
+            [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -387,8 +385,9 @@ class MinecraftBot:
             f"📦 Total accounts: {stats['total']}\n"
             f"✅ Available: {stats['available']}\n"
             f"🔒 Claimed: {stats['claimed']}\n\n"
-            f"Click 'GET ACCOUNT' to claim one.\n"
-            f"Each account shows the REAL Minecraft username.",
+            f"Click 'SHOW ACCOUNT' to view an account.\n"
+            f"Then click 'CLAIM ACCOUNT' to claim it.\n"
+            f"Only YOU will see your claimed account.",
             reply_markup=reply_markup
         )
 
@@ -401,11 +400,11 @@ class MinecraftBot:
         if not account:
             await update.message.reply_text(
                 "❌ You don't have any account claimed.\n"
-                "Use /start and click 'GET ACCOUNT'."
+                "Use /start and click 'SHOW ACCOUNT' then 'CLAIM ACCOUNT'."
             )
             return
         
-        await self._display_account(update, account)
+        await self._display_claimed_account(update, account)
 
     async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_auth(update):
@@ -436,18 +435,18 @@ class MinecraftBot:
             f"Use /start to get another."
         )
 
-    async def _display_account(self, update_obj, account: Dict):
+    async def _display_available_account(self, update_obj, account: Dict):
         hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
         donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
         cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
         bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
         
         message = (
-            f"📋 YOUR ACCOUNT\n"
+            f"🎮 AVAILABLE ACCOUNT\n"
             f"═══════════════════════════\n\n"
             f"📧 Email: {account['email']}\n"
             f"🔑 Password: {account['password']}\n"
-            f"🎮 Minecraft Username: {account['username']}\n\n"
+            f"🎮 Username: {account['username']}\n\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🟡 HYPIXEL\n"
             f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
@@ -463,12 +462,54 @@ class MinecraftBot:
             f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
             f"🎮 BEDROCK EDITION\n"
             f"   Owned: {bedrock_emoji}\n\n"
-            f"📌 This is the REAL Minecraft username for this account.\n"
-            f"Use /release to give this account back."
+            f"⚠️ This account is NOT claimed yet.\n"
+            f"Click 'CLAIM ACCOUNT' to make it YOURS."
         )
         
         keyboard = [
-            [InlineKeyboardButton("🔄 REFRESH STATUS", callback_data=f"refresh_{account['id']}")],
+            [InlineKeyboardButton("✅ CLAIM ACCOUNT", callback_data=f"claim_{account['id']}")],
+            [InlineKeyboardButton("🔄 SHOW ANOTHER", callback_data="show_account")],
+            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        if hasattr(update_obj, 'edit_message_text'):
+            await update_obj.edit_message_text(message, reply_markup=reply_markup)
+        else:
+            await update_obj.message.reply_text(message, reply_markup=reply_markup)
+
+    async def _display_claimed_account(self, update_obj, account: Dict):
+        hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
+        donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
+        cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
+        bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
+        
+        message = (
+            f"📋 YOUR CLAIMED ACCOUNT\n"
+            f"═══════════════════════════\n\n"
+            f"📧 Email: {account['email']}\n"
+            f"🔑 Password: {account['password']}\n"
+            f"🎮 Username: {account['username']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🟡 HYPIXEL\n"
+            f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
+            f"   Rank: {account['hypixel_rank']}\n"
+            f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
+            f"🟠 DONUTSMP\n"
+            f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
+            f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
+            f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
+            f"🟢 CUBECRAFT\n"
+            f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
+            f"   Rank: {account['cubecraft_rank']}\n"
+            f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
+            f"🎮 BEDROCK EDITION\n"
+            f"   Owned: {bedrock_emoji}\n\n"
+            f"✅ This account is YOURS. Only you can see it.\n"
+            f"Use /release to give it back."
+        )
+        
+        keyboard = [
             [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -483,7 +524,8 @@ class MinecraftBot:
         await query.answer()
         
         try:
-            if query.data == "get_account":
+            if query.data == "show_account":
+                # Check if user already has a claimed account
                 existing = db.get_account_by_user(update.effective_user.id)
                 if existing:
                     await query.edit_message_text(
@@ -491,7 +533,7 @@ class MinecraftBot:
                         f"📧 Email: {existing['email']}\n"
                         f"🎮 Username: {existing['username']}\n"
                         f"Use /myaccount to view it.\n"
-                        f"Use /release to release it back."
+                        f"Use /release to give it back."
                     )
                     return
                 
@@ -508,65 +550,62 @@ class MinecraftBot:
                     account["email"], 
                     account["password"]
                 )
-                
                 db.update_server_status(account["id"], server_data)
                 account.update(server_data)
                 
-                db.claim_account(account["id"], update.effective_user.id)
+                await self._display_available_account(query, account)
+            
+            elif query.data.startswith("claim_"):
+                account_id = int(query.data.split("_")[1])
                 
-                stats = db.get_stats()
+                # Check if user already has a claimed account
+                existing = db.get_account_by_user(update.effective_user.id)
+                if existing:
+                    await query.edit_message_text(
+                        f"❌ You already have an account claimed!\n\n"
+                        f"📧 Email: {existing['email']}\n"
+                        f"🎮 Username: {existing['username']}\n"
+                        f"Use /myaccount to view it.\n"
+                        f"Use /release to give it back."
+                    )
+                    return
                 
-                hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
-                donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
-                cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
-                bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
+                # Verify account is still available
+                account = db.get_account_by_user(0)  # Not claimed
+                if not account or account["id"] != account_id:
+                    await query.edit_message_text(
+                        "❌ This account was already claimed by someone else!\n"
+                        "Click 'SHOW ANOTHER' to see a different account."
+                    )
+                    return
                 
-                message = (
-                    f"🎮 ACCOUNT CLAIMED!\n"
-                    f"═══════════════════════════\n\n"
-                    f"📧 Email: {account['email']}\n"
-                    f"🔑 Password: {account['password']}\n"
-                    f"🎮 Minecraft Username: {account['username']}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🟡 HYPIXEL\n"
-                    f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
-                    f"   Rank: {account['hypixel_rank']}\n"
-                    f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
-                    f"🟠 DONUTSMP\n"
-                    f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
-                    f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
-                    f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
-                    f"🟢 CUBECRAFT\n"
-                    f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
-                    f"   Rank: {account['cubecraft_rank']}\n"
-                    f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
-                    f"🎮 BEDROCK EDITION\n"
-                    f"   Owned: {bedrock_emoji}\n\n"
-                    f"📊 Remaining stock: {stats['available']}\n\n"
-                    f"✅ This account is YOURS only.\n"
-                    f"📌 This is the REAL Minecraft username.\n"
-                    f"📌 Use /myaccount to view it anytime.\n"
-                    f"📌 Use /release to give it back."
-                )
+                # Claim the account
+                db.claim_account(account_id, update.effective_user.id)
                 
-                keyboard = [
-                    [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")],
-                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(message, reply_markup=reply_markup)
+                # Get the claimed account
+                claimed = db.get_account_by_user(update.effective_user.id)
+                if claimed:
+                    await self._display_claimed_account(query, claimed)
+                else:
+                    await query.edit_message_text("✅ Account claimed successfully! Use /myaccount to view it.")
             
             elif query.data == "view_stats":
                 stats = db.get_stats()
+                keyboard = [
+                    [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
+                    [InlineKeyboardButton("🔙 BACK", callback_data="back_to_menu")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
                 await query.edit_message_text(
                     f"📊 ACCOUNT STATISTICS\n"
                     f"═══════════════════════════\n\n"
                     f"📦 Total accounts: {stats['total']}\n"
                     f"✅ Available: {stats['available']}\n"
                     f"🔒 Claimed: {stats['claimed']}\n\n"
-                    f"📌 Each account shows its REAL Minecraft username.\n"
-                    f"📌 Use /release to return your account."
+                    f"📌 Each account can only be claimed once.\n"
+                    f"📌 Your claimed account is hidden from others.",
+                    reply_markup=reply_markup
                 )
             
             elif query.data == "myaccount":
@@ -575,68 +614,31 @@ class MinecraftBot:
                 if not account:
                     await query.edit_message_text(
                         "❌ You don't have any account claimed.\n"
-                        "Use /start and click 'GET ACCOUNT'."
+                        "Use /start and click 'SHOW ACCOUNT' then 'CLAIM ACCOUNT'."
                     )
                     return
                 
-                await self._display_account(query, account)
+                await self._display_claimed_account(query, account)
             
-            elif query.data.startswith("refresh_"):
-                parts = query.data.split("_")
-                if len(parts) > 1 and parts[1].isdigit():
-                    account_id = int(parts[1])
-                    account = db.get_account_by_user(update.effective_user.id)
-                    
-                    if not account or account["id"] != account_id:
-                        await query.edit_message_text("❌ Account not found or not yours.")
-                        return
-                    
-                    await query.edit_message_text("🔄 Refreshing server status...")
-                    
-                    server_data = await ServerChecker.check_all(
-                        account["email"], 
-                        account["password"]
-                    )
-                    
-                    db.update_server_status(account_id, server_data)
-                    account.update(server_data)
-                    
-                    await self._display_account(query, account)
-                else:
-                    account = db.get_account_by_user(update.effective_user.id)
-                    if not account:
-                        await query.edit_message_text("❌ No account claimed.")
-                        return
-                    
-                    await query.edit_message_text("🔄 Refreshing server status...")
-                    
-                    server_data = await ServerChecker.check_all(
-                        account["email"], 
-                        account["password"]
-                    )
-                    
-                    db.update_server_status(account["id"], server_data)
-                    account.update(server_data)
-                    
-                    await self._display_account(query, account)
-            
-            elif query.data == "refresh_status":
-                account = db.get_account_by_user(update.effective_user.id)
-                if not account:
-                    await query.edit_message_text("❌ No account claimed.")
-                    return
+            elif query.data == "back_to_menu":
+                stats = db.get_stats()
+                keyboard = [
+                    [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
+                    [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
                 
-                await query.edit_message_text("🔄 Refreshing server status...")
-                
-                server_data = await ServerChecker.check_all(
-                    account["email"], 
-                    account["password"]
+                await query.edit_message_text(
+                    f"🔓 MINECRAFT ACCOUNT STOCK\n"
+                    f"═══════════════════════════\n\n"
+                    f"📦 Total accounts: {stats['total']}\n"
+                    f"✅ Available: {stats['available']}\n"
+                    f"🔒 Claimed: {stats['claimed']}\n\n"
+                    f"Click 'SHOW ACCOUNT' to view an account.\n"
+                    f"Then click 'CLAIM ACCOUNT' to claim it.",
+                    reply_markup=reply_markup
                 )
-                
-                db.update_server_status(account["id"], server_data)
-                account.update(server_data)
-                
-                await self._display_account(query, account)
                 
         except Exception as e:
             logger.error(f"Callback error: {e}")
