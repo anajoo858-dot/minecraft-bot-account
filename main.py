@@ -349,7 +349,6 @@ class MinecraftBot:
     def __init__(self, token: str):
         self.app = Application.builder().token(token).build()
         self._register_handlers()
-        self.user_shown_account = {}  # Track which account was shown to user
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
@@ -537,6 +536,7 @@ class MinecraftBot:
                     )
                     return
                 
+                # Get a NEW available account
                 account = db.get_available_account()
                 
                 if not account:
@@ -546,6 +546,7 @@ class MinecraftBot:
                     )
                     return
                 
+                # Update server status for this account
                 server_data = await ServerChecker.check_all(
                     account["email"], 
                     account["password"]
@@ -570,9 +571,12 @@ class MinecraftBot:
                     )
                     return
                 
-                # Verify account is still available
-                account = db.get_account_by_user(0)  # Not claimed
-                if not account or account["id"] != account_id:
+                # Verify account exists and is available
+                self.cursor = db.conn.cursor()
+                self.cursor.execute("SELECT id FROM accounts WHERE id = ? AND claimed_by = 0", (account_id,))
+                row = self.cursor.fetchone()
+                
+                if not row:
                     await query.edit_message_text(
                         "❌ This account was already claimed by someone else!\n"
                         "Click 'SHOW ANOTHER' to see a different account."
