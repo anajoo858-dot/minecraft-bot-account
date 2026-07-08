@@ -8,6 +8,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # ============ TOKEN ============
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -30,7 +31,6 @@ def create_browser():
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
 
-    # استخدام ChromeDriver اللي في Docker
     service = Service("/usr/local/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_page_load_timeout(60)
@@ -133,7 +133,6 @@ def check_minecraft_license(driver):
 
 # ============ KEYBOARD MENU ============
 def get_main_menu():
-    from telebot.types import ReplyKeyboardMarkup, KeyboardButton
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     btn1 = KeyboardButton("/start")
     btn2 = KeyboardButton("/secure")
@@ -308,7 +307,9 @@ if __name__ == "__main__":
     print("✅ Bot is running!")
     while True:
         try:
-            bot.polling(none_stop=True, interval=1)
+            bot.remove_webhook()
+            time.sleep(1)
+            bot.polling(none_stop=True, interval=1, timeout=60)
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(5)
+            time.sleep(10)
