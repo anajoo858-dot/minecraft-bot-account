@@ -8,6 +8,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 # ============ TOKEN ============
@@ -18,7 +19,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 user_sessions = {}
 
-# ============ SELENIUM ============
+# ============ SELENIUM (AUTO-DRIVER) ============
 def create_browser():
     options = ChromeOptions()
     options.add_argument("--headless=new")
@@ -31,7 +32,7 @@ def create_browser():
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
 
-    service = Service("/usr/local/bin/chromedriver")
+    service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_page_load_timeout(60)
     return driver
