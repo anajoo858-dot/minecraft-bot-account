@@ -18,14 +18,8 @@ RUN wget -O /tmp/chromedriver.zip https://storage.googleapis.com/chrome-for-test
     && chmod +x /usr/local/bin/chromedriver \
     && rm /tmp/chromedriver.zip
 
-# تجهيز مجلد العمل
 WORKDIR /app
-
-# نسخ الملفات
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
-
-# تشغيل البوت
 CMD ["python", "main.py"]
