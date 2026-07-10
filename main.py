@@ -19,6 +19,7 @@ Required environment variables:
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import sys
@@ -728,6 +729,7 @@ class BuildStates(StatesGroup):
 
 
 def owner_only(handler):
+    @functools.wraps(handler)
     async def wrapper(event, *args, **kwargs):
         user = event.from_user
         if user is None or user.id != OWNER_ID:
