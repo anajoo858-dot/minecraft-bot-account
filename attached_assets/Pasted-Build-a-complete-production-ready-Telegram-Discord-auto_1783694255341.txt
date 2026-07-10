@@ -1,0 +1,425 @@
+Build a complete production-ready Telegram + Discord automation system using Python.
+
+The project must be fully compatible with Railway deployment.
+
+=========================
+GENERAL REQUIREMENTS
+=========================
+
+- Python 3.12+
+- Everything should run from a single file named main.py.
+- Use aiogram for the Telegram bot.
+- Use discord.py for the Discord bot.
+- Fully asynchronous.
+- Professional logging.
+- Proper error handling.
+- English language only.
+- Clean and modern code.
+- No placeholder code.
+- Ready to run immediately.
+
+Generate:
+
+- main.py
+- requirements.txt
+- Procfile
+- runtime.txt
+- railway.json
+- README.md
+- .gitignore
+
+The project must start with:
+
+python main.py
+
+=========================
+ENVIRONMENT VARIABLES
+=========================
+
+Never hardcode tokens.
+
+Use Railway Environment Variables.
+
+Required:
+
+TELEGRAM_BOT_TOKEN
+DISCORD_BOT_TOKEN
+OWNER_ID
+
+=========================
+TELEGRAM BOT
+=========================
+
+Create a professional Telegram control panel.
+
+Use Inline Keyboard Buttons.
+
+Only OWNER_ID can use the bot.
+
+Everything must be in English.
+
+Menu example:
+
+🏠 Home
+🏗 Build Server
+🎮 Select Games
+⚙ Settings
+📊 Status
+❌ Cancel
+
+=========================
+DISCORD BOT
+=========================
+
+The Discord bot will already be invited to my Discord server with Administrator permission.
+
+The Telegram bot should display every Discord server where the bot is present.
+
+After selecting one server, all operations should happen inside that server.
+
+=========================
+SERVER BUILDER
+=========================
+
+Automatically create:
+
+Roles
+
+Categories
+
+Text Channels
+
+Voice Channels
+
+Permissions
+
+Professional order
+
+Everything should look modern and clean.
+
+=========================
+DEFAULT CATEGORIES
+=========================
+
+📢 INFORMATION
+
+- rules
+- announcements
+- updates
+- welcome
+
+💬 COMMUNITY
+
+- general
+- media
+- memes
+
+🎮 GAMING
+
+This category is dynamic.
+
+Games selected by the user will be created here.
+
+👥 VOICE
+
+General VC
+Gaming VC
+
+🛡 STAFF
+
+staff-chat
+staff-voice
+
+🤖 BOTS
+
+bot-commands
+
+📜 LOGS
+
+logs
+
+=========================
+ROLES
+=========================
+
+Automatically create:
+
+👑 Owner
+
+🛡 Administrator
+
+⚔ Moderator
+
+🎮 Gamer
+
+🤖 Bots
+
+👤 Member
+
+Permissions:
+
+Owner:
+Full permissions.
+
+Administrator:
+Administrator permission.
+
+Moderator:
+Manage Messages
+Kick Members
+Timeout Members
+Manage Nicknames
+
+Bots:
+Bot permissions only.
+
+Member:
+Default permissions.
+
+Never give Administrator permission to @everyone.
+
+=========================
+CHANNEL PERMISSIONS
+=========================
+
+Announcements:
+Only Owner and Administrators can send messages.
+
+Everyone else can only read.
+
+Rules:
+Only Owner and Administrators can send messages.
+
+Updates:
+Only Owner and Administrators can send messages.
+
+Welcome:
+Only the bot can send messages.
+
+Logs:
+Visible only to Owner, Administrators and Moderators.
+
+Staff:
+Visible only to Staff.
+
+Bot Commands:
+Only Owner and Staff can send messages.
+
+General channels:
+Everyone can chat.
+
+Voice channels:
+Everyone can join.
+
+=========================
+GAME DATABASE
+=========================
+
+Include a large built-in game database.
+
+Examples:
+
+Minecraft
+Among Us
+Roblox
+Valorant
+Fortnite
+Counter-Strike 2
+Rocket League
+League of Legends
+Rust
+ARK
+Terraria
+Fall Guys
+Dead by Daylight
+Rainbow Six Siege
+Destiny 2
+Apex Legends
+Overwatch 2
+Project Zomboid
+Palworld
+GTA V
+
+...and many more.
+
+=========================
+GAME SEARCH
+=========================
+
+The Telegram bot must include a search feature.
+
+The user can type:
+
+mine
+
+Result:
+
+Minecraft
+
+User types:
+
+fall
+
+Result:
+
+Fall Guys
+
+=========================
+PLATFORM DETECTION
+=========================
+
+Each game contains its official PC stores.
+
+Supported stores:
+
+Steam
+
+Epic Games Store
+
+Microsoft Store
+
+Xbox Store
+
+Create ONLY the stores that officially support the selected game.
+
+Examples:
+
+Among Us
+
+Steam
+
+Epic Games Store
+
+Microsoft Store
+
+Xbox Store
+
+Create:
+
+📂 Platforms
+
+steam
+
+epic-games
+
+microsoft-store
+
+xbox-store
+
+Example:
+
+Fall Guys
+
+Epic Games Store
+
+Microsoft Store
+
+Xbox Store
+
+Create:
+
+📂 Platforms
+
+epic-games
+
+microsoft-store
+
+xbox-store
+
+Steam should NOT be created.
+
+=========================
+GAME CHANNELS
+=========================
+
+Do NOT use one template for every game.
+
+Generate channels based on the selected game.
+
+Minecraft example:
+
+general
+
+survival
+
+creative
+
+mods
+
+resource-packs
+
+screenshots
+
+clips
+
+Among Us example:
+
+general
+
+find-lobby
+
+voice-chat
+
+memes
+
+screenshots
+
+Valorant example:
+
+general
+
+ranked
+
+looking-for-team
+
+lineups
+
+clips
+
+The bot should automatically choose professional channel names for every game.
+
+=========================
+MULTIPLE GAMES
+=========================
+
+Allow selecting multiple games.
+
+Example:
+
+Minecraft
+
+Among Us
+
+Roblox
+
+The bot creates one category for each game.
+
+=========================
+EXTRA FEATURES
+=========================
+
+Professional embeds.
+
+Progress messages while building.
+
+Success message after completion.
+
+Automatic rate-limit handling.
+
+Automatic retries on Discord API errors.
+
+Automatic cleanup if something fails.
+
+=========================
+FINAL REQUIREMENT
+=========================
+
+The finished project must be complete.
+
+No TODO comments.
+
+No unfinished functions.
+
+No placeholder code.
+
+The project should be ready to upload directly to GitHub and deploy on Railway without modifications.
