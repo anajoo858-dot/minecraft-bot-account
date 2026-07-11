@@ -1419,50 +1419,50 @@ async def cb_build_start(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-        prog_msg = await callback.message.edit_text(
-        f'🏗 <b>Building "{guild.name}"…</b>\n\nStarting, please wait…'
+    prog_msg = await callback.message.edit_text(
+    f'🏗 <b>Building "{guild.name}"…</b>\n\nStarting, please wait…'
     )
 
-        await callback.answer()
+    await callback.answer()
 
-        last_step = -1
+    last_step = -1
 
-async def on_progress(p: BuildProgress) -> None:
-    nonlocal last_step
+    async def on_progress(p: BuildProgress) -> None:
+        nonlocal last_step
 
-    if p.steps_done == last_step:
-        return
+        if p.steps_done == last_step:
+            return
 
-    last_step = p.steps_done
-    recent = "\n".join(f"• {ln}" for ln in p.log[-6:])
+        last_step = p.steps_done
+        recent = "\n".join(f"• {ln}" for ln in p.log[-6:])
 
-    try:
-        await prog_msg.edit_text(
-            f'🏗 <b>Building "{guild.name}"…</b>\n\n'
-            f'Steps completed: <b>{p.steps_done}</b>\n\n{recent}'
-        )
-    except Exception:
-        pass
-    try:
-        p = await build_server(guild, on_progress=on_progress)
-        await prog_msg.edit_text(
-            "✅ <b>Build Complete</b>\n\n"
-            f"Server: <b>{guild.name}</b>\n"
-            f"Steps completed: <b>{p.steps_done}</b>\n\n"
-            "Roles, categories, channels, permissions, and the game-selection "
-            "embed have all been created successfully.",
-            reply_markup=home_keyboard(),
-        )
-        logger.info("Build complete — guild_id=%s (%s)", guild.id, guild.name)
-    except Exception as exc:
-        logger.exception("Build failed — guild_id=%s", guild.id)
-        await prog_msg.edit_text(
-            "❌ <b>Build Failed</b>\n\n"
-            f"Error: <code>{exc}</code>\n\n"
-            "Partially created items have been rolled back.\n"
-            "Ensure the bot has Administrator permission and try again.",
-            reply_markup=home_keyboard(),
-        )
+        try:
+            await prog_msg.edit_text(
+                f'🏗 <b>Building "{guild.name}"…</b>\n\n'
+                f'Steps completed: <b>{p.steps_done}</b>\n\n{recent}'
+            )
+        except Exception:
+            pass
+        try:
+            p = await build_server(guild, on_progress=on_progress)
+            await prog_msg.edit_text(
+                "✅ <b>Build Complete</b>\n\n"
+                f"Server: <b>{guild.name}</b>\n"
+                f"Steps completed: <b>{p.steps_done}</b>\n\n"
+                "Roles, categories, channels, permissions, and the game-selection "
+                "embed have all been created successfully.",
+                reply_markup=home_keyboard(),
+            )
+            logger.info("Build complete — guild_id=%s (%s)", guild.id, guild.name)
+        except Exception as exc:
+            logger.exception("Build failed — guild_id=%s", guild.id)
+            await prog_msg.edit_text(
+                "❌ <b>Build Failed</b>\n\n"
+                f"Error: <code>{exc}</code>\n\n"
+                "Partially created items have been rolled back.\n"
+                "Ensure the bot has Administrator permission and try again.",
+                reply_markup=home_keyboard(),
+            )
 
 
 # ── Update flow ──────────────────────────────────────────────────────────────
