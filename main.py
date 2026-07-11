@@ -1427,22 +1427,22 @@ async def cb_build_start(callback: CallbackQuery, state: FSMContext) -> None:
 
         last_step = -1
 
-        async def on_progress(p: BuildProgress) -> None:
-        nonlocal last_step
-        if p.steps_done == last_step:
-            return
+async def on_progress(p: BuildProgress) -> None:
+    nonlocal last_step
 
-        last_step = p.steps_done
-        recent = "\n".join(f"• {ln}" for ln in p.log[-6:])
+    if p.steps_done == last_step:
+        return
 
-        try:
-            await prog_msg.edit_text(
-                f'🏗 <b>Building "{guild.name}"…</b>\n\n'
-                f'Steps completed: <b>{p.steps_done}</b>\n\n{recent}'
-            )
-        except Exception:
-            pass
+    last_step = p.steps_done
+    recent = "\n".join(f"• {ln}" for ln in p.log[-6:])
 
+    try:
+        await prog_msg.edit_text(
+            f'🏗 <b>Building "{guild.name}"…</b>\n\n'
+            f'Steps completed: <b>{p.steps_done}</b>\n\n{recent}'
+        )
+    except Exception:
+        pass
     try:
         p = await build_server(guild, on_progress=on_progress)
         await prog_msg.edit_text(
