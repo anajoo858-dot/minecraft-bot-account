@@ -1496,7 +1496,7 @@ async def cb_do_update(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     prog_msg = await callback.message.edit_text(
-        f'🔄 <b>Updating "{guild.name}"…</b>\n\nChecking structure, please wait…'
+        f"🔄 <b>Updating '{guild.name}'…</b>\n\nChecking structure, please wait…"
     )
     await callback.answer()
 
@@ -1510,7 +1510,7 @@ async def cb_do_update(callback: CallbackQuery, state: FSMContext) -> None:
         recent = "\n".join(f"• {ln}" for ln in p.log[-6:])
         try:
             await prog_msg.edit_text(
-                f"🔄 <b>Updating "{guild.name}"…</b>\n\n"
+                f"🔄 <b>Updating '{guild.name}'…</b>\n\n"
                 f"Items updated: <b>{p.steps_done}</b>\n\n{recent or 'Checking…'}"
             )
         except Exception:
@@ -1583,7 +1583,7 @@ async def cb_reset_confirm(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     prog_msg = await callback.message.edit_text(
-        f"🗑 <b>Resetting "{guild.name}"…</b>\n\nRemoving bot-managed items…"
+        f"🗑 <b>Resetting '{guild.name}'…</b>\n\nRemoving bot-managed items…"
     )
     await callback.answer()
 
@@ -1596,7 +1596,7 @@ async def cb_reset_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         last_step = p.steps_done
         try:
             await prog_msg.edit_text(
-                f"🗑 <b>Resetting "{guild.name}"…</b>\n\n"
+                f"🗑 <b>Resetting '{guild.name}'…</b>\n\n"
                 f"Items removed: <b>{p.steps_done}</b>"
             )
         except Exception:
