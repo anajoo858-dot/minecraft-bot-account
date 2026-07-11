@@ -1420,11 +1420,12 @@ async def cb_build_start(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     prog_msg = await callback.message.edit_text(
-        f"🏗 <b>Building "{guild.name}"…</b>\n\nStarting, please wait…"
-    )
-    await callback.answer()
+    f'🏗 <b>Building "{guild.name}"…</b>\n\nStarting, please wait…'
+)
 
-    last_step = -1
+await callback.answer()
+
+last_step = -1
 
     async def on_progress(p: BuildProgress) -> None:
         nonlocal last_step
