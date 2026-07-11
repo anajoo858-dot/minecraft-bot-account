@@ -1496,7 +1496,7 @@ async def cb_do_update(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     prog_msg = await callback.message.edit_text(
-        f"🔄 <b>Updating "{guild.name}"…</b>\n\nChecking structure, please wait…"
+        f'🔄 <b>Updating "{guild.name}"…</b>\n\nChecking structure, please wait…'
     )
     await callback.answer()
 
